@@ -11,8 +11,10 @@ import requests
 import streamlit as st
 import pandas as pd
 
-# Dynamic API endpoint resolution (Supports Streamlit Cloud st.secrets & env vars)
-DEFAULT_API_URL = "http://127.0.0.1:8000/api/v1"
+# Dynamic API endpoint resolution (Supports Cloud Tunnel, Localhost, st.secrets & env vars)
+DEFAULT_API_URL = "https://badge-voltage-mia-father.trycloudflare.com/api/v1"
+LOCAL_API_URL = "http://127.0.0.1:8000/api/v1"
+
 try:
     if hasattr(st, "secrets") and "API_BASE" in st.secrets:
         API_BASE = st.secrets["API_BASE"]
@@ -137,23 +139,42 @@ st.markdown("""
 
 
 # ==============================================================================
-# DATA INGESTION
+# DATA INGESTION (RESILIENT AUTO-DISCOVERY)
 # ==============================================================================
 def query_api(endpoint: str):
-    try:
-        res = requests.get(f"{API_BASE}/{endpoint}", timeout=2.0)
-        if res.status_code == 200:
-            return res.json()
-    except Exception:
-        pass
+    global API_BASE
+    # Candidate endpoints in priority order: active API_BASE, Cloud Tunnel, Localhost
+    candidates = [API_BASE, DEFAULT_API_URL, LOCAL_API_URL]
+    seen = set()
+    for base in candidates:
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        try:
+            res = requests.get(f"{base}/{endpoint}", timeout=2.5)
+            if res.status_code == 200:
+                API_BASE = base
+                return res.json()
+        except Exception:
+            continue
     return None
 
 def send_command(endpoint: str, payload: dict = None):
-    try:
-        res = requests.post(f"{API_BASE}/{endpoint}", json=payload, timeout=3.0)
-        return res.status_code == 200, res.json() if res.status_code == 200 else res.text
-    except Exception as e:
-        return False, str(e)
+    global API_BASE
+    candidates = [API_BASE, DEFAULT_API_URL, LOCAL_API_URL]
+    seen = set()
+    for base in candidates:
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        try:
+            res = requests.post(f"{base}/{endpoint}", json=payload, timeout=3.0)
+            if res.status_code == 200:
+                API_BASE = base
+                return True, res.json()
+        except Exception:
+            continue
+    return False, "Failed to connect to gateway endpoints"
 
 
 # ==============================================================================
