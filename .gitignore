@@ -1,0 +1,27 @@
+# Security & Sensitive Credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Database & Storage
+*.db
+*.sqlite3
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
