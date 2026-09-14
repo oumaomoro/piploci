@@ -13,9 +13,12 @@ import pandas as pd
 
 # Dynamic API endpoint resolution (Supports Streamlit Cloud st.secrets & env vars)
 DEFAULT_API_URL = "http://127.0.0.1:8000/api/v1"
-if hasattr(st, "secrets") and "API_BASE" in st.secrets:
-    API_BASE = st.secrets["API_BASE"]
-else:
+try:
+    if hasattr(st, "secrets") and "API_BASE" in st.secrets:
+        API_BASE = st.secrets["API_BASE"]
+    else:
+        API_BASE = os.getenv("API_BASE", DEFAULT_API_URL)
+except Exception:
     API_BASE = os.getenv("API_BASE", DEFAULT_API_URL)
 
 st.set_page_config(
