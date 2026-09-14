@@ -90,14 +90,20 @@ def test_database_supabase_postgres_and_models():
 
 
 def test_supabase_connection_pooling_configuration():
-    """Verify SQLAlchemy engine connection pooling configuration with pool_pre_ping=True and pool_size=10."""
+    """Verify SQLAlchemy engine connection pooling configuration with pool_pre_ping=True, pool_size=10, and max_overflow=20."""
     from sqlalchemy import create_engine
+    from database import normalize_db_url
     
-    test_pg_url = "postgresql+psycopg2://postgres:piploci34%40!@db.npjsxpsqleckvhlevdyz.supabase.co:5432/postgres"
-    pg_engine = create_engine(test_pg_url, pool_pre_ping=True, pool_size=10, max_overflow=5)
+    test_pg_url = "postgresql://postgres:piploci34@!@db.npjsxpsqleckvhlevdyz.supabase.co:5432/postgres"
+    norm_url = normalize_db_url(test_pg_url)
+    assert "postgresql+psycopg2" in norm_url
+    assert "piploci34%40%21" in norm_url  # password is URL encoded
+    
+    pg_engine = create_engine(norm_url, pool_pre_ping=True, pool_size=10, max_overflow=20)
     
     assert pg_engine.pool._pre_ping is True
     assert pg_engine.pool.size() == 10
+    assert pg_engine.pool._max_overflow == 20
 
 
 def test_dynamic_atr_lot_sizing():

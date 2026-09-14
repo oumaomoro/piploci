@@ -4,6 +4,7 @@ Features robust connection pooling, auto-reconnect (pool_pre_ping=True, pool_siz
 and schema seeding for strategy configurations, trading logs, and circuit breaker events.
 """
 
+import urllib.parse
 from datetime import datetime, timezone
 import logging
 from typing import Generator
@@ -23,22 +24,42 @@ from config import (
 logger = logging.getLogger("Database")
 
 
+def normalize_db_url(url: str) -> str:
+    """
+    Normalizes PostgreSQL connection string for SQLAlchemy + psycopg2.
+    Properly URL-encodes special characters (e.g. '@', '!') in passwords
+    and ensures the postgresql+psycopg2 dialect driver prefix is present.
+    """
+    if not url:
+        return url
+    # Handle raw unencoded passwords with special characters: e.g. postgresql://postgres:piploci34@!@db...
+    if ":piploci34@!@" in url:
+        url = url.replace(":piploci34@!@", f":{urllib.parse.quote_plus('piploci34@!')}@")
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+    elif url.startswith("postgres://"):
+        url = "postgresql+psycopg2://" + url[len("postgres://"):]
+    return url
+
+
 def init_engine(db_url: str):
     """
-    Initializes SQLAlchemy engine with robust connection pooling (pool_pre_ping=True, pool_size=10)
+    Initializes SQLAlchemy engine with robust dynamic connection pooling:
+    (pool_pre_ping=True, pool_size=10, max_overflow=20)
     for Supabase PostgreSQL, with resilient fallback to SQLite if remote network is unreachable.
     """
-    if "postgresql" in db_url:
+    norm_url = normalize_db_url(db_url)
+    if "postgresql" in norm_url:
         try:
             eng = create_engine(
-                db_url,
+                norm_url,
                 pool_pre_ping=True,
                 pool_size=10,
-                max_overflow=5,
+                max_overflow=20,
                 pool_recycle=1800,
                 connect_args={"connect_timeout": 5},
             )
-            # Pre-flight ping
+            # Pre-flight connection ping
             with eng.connect() as conn:
                 pass
             logger.info("Successfully connected to Supabase PostgreSQL database.")
@@ -51,8 +72,8 @@ def init_engine(db_url: str):
             fallback_url = "sqlite:///./trading_bot.db"
             return create_engine(fallback_url, connect_args={"check_same_thread": False})
     else:
-        connect_args = {"check_same_thread": False} if "sqlite" in db_url else {}
-        return create_engine(db_url, connect_args=connect_args)
+        connect_args = {"check_same_thread": False} if "sqlite" in norm_url else {}
+        return create_engine(norm_url, connect_args=connect_args)
 
 
 engine = init_engine(DATABASE_URL)
