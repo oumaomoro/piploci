@@ -66,19 +66,16 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
     # Supabase Infrastructure Configuration
-    SUPABASE_PROJECT_ID: str = os.getenv("SUPABASE_PROJECT_ID", "npjsxpsqleckvhlevdyz")
-    SUPABASE_DB_HOST: str = os.getenv("SUPABASE_DB_HOST", "db.npjsxpsqleckvhlevdyz.supabase.co")
-    SUPABASE_DB_PASSWORD: str = os.getenv("SUPABASE_DB_PASSWORD", "piploci34@!")
-    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "https://npjsxpsqleckvhlevdyz.supabase.co")
-    SUPABASE_PUBLISHABLE_KEY: str = os.getenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_uw9ppL7mH5XalugyWb7ECw_AQglanlT")
-    SUPABASE_SERVICE_ROLE_KEY: str = os.getenv(
-        "SUPABASE_SERVICE_ROLE_KEY",
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wanN4cHNxbGVja3ZobGV2ZHl6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTM3NzIyOSwiZXhwIjoyMTA0OTUzMjI5fQ.3XDMjL-BgtkScTqa4jej-kSiNATZW4lMNIgYTvSMMFM"
-    )
+    SUPABASE_PROJECT_ID: str = os.getenv("SUPABASE_PROJECT_ID", "")
+    SUPABASE_DB_HOST: str = os.getenv("SUPABASE_DB_HOST", "")
+    SUPABASE_DB_PASSWORD: str = os.getenv("SUPABASE_DB_PASSWORD", "")
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
+    SUPABASE_PUBLISHABLE_KEY: str = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
+    SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        f"postgresql+psycopg2://postgres:{urllib.parse.quote_plus(os.getenv('SUPABASE_DB_PASSWORD', 'piploci34@!'))}@{os.getenv('SUPABASE_DB_HOST', 'db.npjsxpsqleckvhlevdyz.supabase.co')}:5432/postgres"
+        "sqlite:///./trading_bot.db"
     )
     
     # Global Risk Controls

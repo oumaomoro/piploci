@@ -4,7 +4,19 @@
 !.env.example
 *.pem
 *.key
+*.cert
+*.crt
+*.pfx
+*.p12
+*.token
+*secret*
+!*secret*.py
+*.cert.pem
 .streamlit/secrets.toml
+.cloudflared/
+*.json
+!package.json
+!tsconfig*.json
 
 
 # Database & Storage

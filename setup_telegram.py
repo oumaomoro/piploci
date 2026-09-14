@@ -20,7 +20,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 
-BOT_TOKEN = "8637700646:AAEFXQepnyw8h1WaC5Bu-yJ-xnrvSAbMU6Q"
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 ENV_FILE = os.path.join(os.path.dirname(__file__), ".env")
 
 
@@ -68,10 +68,25 @@ def patch_env(chat_id: int):
 
 
 def main():
+    global BOT_TOKEN
     print("=" * 60)
     print("  Piploci — Telegram Auto-Configuration")
     print("=" * 60)
-    print(f"\n[INFO] Using bot token: {BOT_TOKEN[:20]}...")
+
+    if not BOT_TOKEN and os.path.exists(ENV_FILE):
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("TELEGRAM_BOT_TOKEN="):
+                    BOT_TOKEN = line.split("=", 1)[1].strip()
+                    break
+
+    if not BOT_TOKEN:
+        BOT_TOKEN = input("Enter your Telegram Bot Token (from @BotFather): ").strip()
+        if not BOT_TOKEN:
+            print("[ERROR] No bot token provided. Exiting.")
+            sys.exit(1)
+
+    print(f"\n[INFO] Using bot token: {BOT_TOKEN[:10]}...{BOT_TOKEN[-5:]}")
     print("[INFO] Polling Telegram for recent messages...\n")
 
     result = get_updates()

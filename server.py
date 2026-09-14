@@ -191,6 +191,77 @@ async def telemetry_broadcaster():
         await asyncio.sleep(1.5)
 
 
+async def send_eod_daily_digest(db_session_factory=None):
+    """
+    Computes today's closed trade stats and sends institutional EOD Telegram digest.
+    """
+    from database import SessionLocal
+    import pytz
+    from notifier import send_telegram_alert, format_daily_digest
+
+    eat = pytz.timezone("Africa/Nairobi")
+    now_eat = datetime.now(eat)
+    today_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    db = db_session_factory() if db_session_factory else SessionLocal()
+    try:
+        # Filter closed trades from today (or fallback to all closed if none today)
+        closed_trades = db.query(TradeLogModel).filter(
+            TradeLogModel.status == "CLOSED",
+            TradeLogModel.timestamp >= today_start.astimezone(timezone.utc).replace(tzinfo=None)
+        ).all()
+
+        total_trades = len(closed_trades)
+        wins = sum(1 for t in closed_trades if (t.pnl or 0.0) > 0)
+        net_pnl = sum((t.pnl or 0.0) for t in closed_trades)
+        win_rate = (wins / total_trades * 100.0) if total_trades > 0 else 0.0
+        
+        # Max drawdown exposure reached
+        max_dd = getattr(bot_engine, "max_drawdown_exposure", 0.0)
+        
+        # Slippage average
+        slippages = [getattr(t, "slippage", 0.0) for t in closed_trades if getattr(t, "slippage", 0.0) != 0.0]
+        avg_slippage = (sum(slippages) / len(slippages)) if slippages else 0.0
+
+        digest_text = format_daily_digest(
+            total_trades=total_trades,
+            net_realized_pnl=net_pnl,
+            win_rate=win_rate,
+            max_drawdown_exposure=max_dd,
+            avg_slippage_pts=avg_slippage,
+            date_str=now_eat.strftime("%Y-%m-%d")
+        )
+        await send_telegram_alert(digest_text)
+        return {
+            "total_trades": total_trades,
+            "net_pnl": net_pnl,
+            "win_rate": win_rate,
+            "digest_text": digest_text
+        }
+    finally:
+        db.close()
+
+
+async def eod_digest_scheduler():
+    """
+    Background worker that triggers send_eod_daily_digest daily at 23:59 EAT.
+    """
+    import pytz
+    eat = pytz.timezone("Africa/Nairobi")
+    last_dispatched_date = None
+
+    while True:
+        try:
+            now_eat = datetime.now(eat)
+            if now_eat.hour == 23 and now_eat.minute >= 59 and last_dispatched_date != now_eat.date():
+                logger.info("Executing scheduled EOD Daily Telegram Digest...")
+                await send_eod_daily_digest()
+                last_dispatched_date = now_eat.date()
+        except Exception as e:
+            logger.error(f"EOD digest scheduler error: {e}")
+        await asyncio.sleep(45)
+
+
 # ==============================================================================
 # FASTAPI LIFECYCLE
 # ==============================================================================
@@ -201,10 +272,12 @@ async def lifespan(app: FastAPI):
     init_database()
     await bot_engine.start()
     telemetry_task = asyncio.create_task(telemetry_broadcaster())
-    log_system_event("FastAPIServer", f"{APP_NAME} server and WebSocket bridge started.")
+    eod_task = asyncio.create_task(eod_digest_scheduler())
+    log_system_event("FastAPIServer", f"{APP_NAME} server, WebSocket bridge, and EOD scheduler started.")
     yield
     # Shutdown
     telemetry_task.cancel()
+    eod_task.cancel()
     await bot_engine.stop()
     logger.info("FastAPI server shut down successfully.")
 

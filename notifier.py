@@ -44,3 +44,28 @@ async def send_telegram_alert(message: str) -> None:
                 logger.warning(f"Telegram alert failed: {res.text}")
     except Exception as e:
         logger.warning(f"Telegram alert exception: {e}")
+
+
+def format_daily_digest(
+    total_trades: int,
+    net_realized_pnl: float,
+    win_rate: float,
+    max_drawdown_exposure: float,
+    avg_slippage_pts: float,
+    date_str: str = ""
+) -> str:
+    """
+    Builds a clean, institutional-grade end-of-day Telegram digest message.
+    """
+    pnl_sign = "+" if net_realized_pnl >= 0 else ""
+    return (
+        f"<b>📊 Piploci Trading Desk — End of Day Digest</b>\n"
+        f"<i>Date: {date_str or 'Today'}</i>\n\n"
+        f"• <b>Total Trades:</b> {total_trades}\n"
+        f"• <b>Net Realized P&L:</b> {pnl_sign}${net_realized_pnl:,.2f}\n"
+        f"• <b>Win Rate:</b> {win_rate:.1f}%\n"
+        f"• <b>Max Drawdown Exposure:</b> ${max_drawdown_exposure:,.2f}\n"
+        f"• <b>Average Slippage:</b> {avg_slippage_pts:.1f} pts\n\n"
+        f"<i>System: Piploci Engine (Automated Reporting)</i>"
+    )
+

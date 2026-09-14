@@ -94,10 +94,10 @@ def test_supabase_connection_pooling_configuration():
     from sqlalchemy import create_engine
     from database import normalize_db_url
     
-    test_pg_url = "postgresql://postgres:piploci34@!@db.npjsxpsqleckvhlevdyz.supabase.co:5432/postgres"
+    test_pg_url = "postgresql://testuser:testpass%40!@db.example.supabase.co:5432/postgres"
     norm_url = normalize_db_url(test_pg_url)
     assert "postgresql+psycopg2" in norm_url
-    assert "piploci34%40%21" in norm_url  # password is URL encoded
+    assert "testpass%40%21" in norm_url  # password is URL encoded
     
     pg_engine = create_engine(norm_url, pool_pre_ping=True, pool_size=10, max_overflow=20)
     
@@ -618,4 +618,54 @@ def test_status_endpoint_returns_performance_block():
     assert "win_rate_pct" in perf
     assert "profit_factor" in perf
     assert "sharpe_proxy" in perf
+
+
+def test_healthchecker_alert_trigger():
+    """Verify HealthChecker triggers Telegram alert after consecutive probe failures."""
+    from healthcheck import HealthChecker
+    from unittest.mock import patch, AsyncMock
+
+    async def _run_test():
+        checker = HealthChecker(target_url="http://127.0.0.1:9999/invalid", interval=1)
+        with patch("healthcheck.send_telegram_alert", new_callable=AsyncMock) as mock_alert:
+            # First failure -> no alert yet
+            await checker.handle_probe_result(is_healthy=False)
+            assert checker.consecutive_failures == 1
+            assert checker.alert_dispatched is False
+            mock_alert.assert_not_called()
+
+            # Second failure -> triggers emergency alert
+            await checker.handle_probe_result(is_healthy=False)
+            assert checker.consecutive_failures == 2
+            assert checker.alert_dispatched is True
+            mock_alert.assert_called_once()
+            assert "CRITICAL: Piploci Engine Offline" in mock_alert.call_args[0][0]
+
+            # Recovery reset
+            await checker.handle_probe_result(is_healthy=True)
+            assert checker.consecutive_failures == 0
+            assert checker.alert_dispatched is False
+
+    asyncio.run(_run_test())
+
+
+def test_eod_daily_digest_format():
+    """Verify format_daily_digest output structure and numeric representations."""
+    from notifier import format_daily_digest
+
+    digest = format_daily_digest(
+        total_trades=8,
+        net_realized_pnl=142.50,
+        win_rate=75.0,
+        max_drawdown_exposure=2.10,
+        avg_slippage_pts=0.4,
+        date_str="2026-09-14"
+    )
+    assert "End of Day Digest" in digest
+    assert "Total Trades:</b> 8" in digest
+    assert "Net Realized P&L:</b> +$142.50" in digest
+    assert "Win Rate:</b> 75.0%" in digest
+    assert "Max Drawdown Exposure:</b> $2.10" in digest
+    assert "Average Slippage:</b> 0.4 pts" in digest
+
 

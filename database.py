@@ -32,9 +32,18 @@ def normalize_db_url(url: str) -> str:
     """
     if not url:
         return url
-    # Handle raw unencoded passwords with special characters: e.g. postgresql://postgres:piploci34@!@db...
-    if ":piploci34@!@" in url:
-        url = url.replace(":piploci34@!@", f":{urllib.parse.quote_plus('piploci34@!')}@")
+    # Handle raw unencoded passwords with special characters (like '@' or '!') in user:pass@host
+    try:
+        import re
+        # Match postgresql://user:password@host...
+        m = re.match(r"^(postgres(?:ql)?(?:\+[a-z0-9]+)?://)([^:]+):([^@]+)@(.+)$", url)
+        if m:
+            prefix, user, raw_pwd, rest = m.groups()
+            encoded_pwd = urllib.parse.quote_plus(urllib.parse.unquote_plus(raw_pwd))
+            url = f"{prefix}{user}:{encoded_pwd}@{rest}"
+    except Exception:
+        pass
+
     if url.startswith("postgresql://"):
         url = "postgresql+psycopg2://" + url[len("postgresql://"):]
     elif url.startswith("postgres://"):
