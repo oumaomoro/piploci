@@ -293,10 +293,40 @@ async def login_alias(payload: LoginRequest):
 
 
 @app.get("/api/v1/status")
-async def get_status():
-    """Returns current balance, equity, active drawdown, circuit breaker state, and MT5 health."""
+async def get_status(db: Session = Depends(get_db)):
+    """Returns current balance, equity, active drawdown, circuit breaker state, MT5 health, and performance telemetry."""
+    import math
     acct = bot_engine.mt5_client.account_info() if bot_engine.mt5_client else None
     balance = getattr(acct, "balance", 1000.0) if acct else 1000.0
+
+    # Calculate Performance Telemetry
+    closed_trades = db.query(TradeLogModel).filter(TradeLogModel.status == "CLOSED").all()
+    total_trades = len(closed_trades)
+    wins = 0
+    gross_profit = 0.0
+    gross_loss = 0.0
+    pnls = []
+
+    for t in closed_trades:
+        pnl = t.pnl or 0.0
+        pnls.append(pnl)
+        if pnl > 0:
+            wins += 1
+            gross_profit += pnl
+        elif pnl < 0:
+            gross_loss += abs(pnl)
+            
+    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0.0)
+    
+    # Sharpe Proxy (Trade-based Information Ratio)
+    sharpe_proxy = 0.0
+    if total_trades > 0:
+        mean_pnl = sum(pnls) / total_trades
+        variance = sum((p - mean_pnl) ** 2 for p in pnls) / total_trades
+        std_dev = math.sqrt(variance)
+        safe_std_dev = std_dev if std_dev > 0 else 1.0
+        sharpe_proxy = mean_pnl / safe_std_dev
 
     # Exclude manual trades (magic = 0) - isolate bot floating PnL and drawdown
     bot_positions = bot_engine.get_bot_positions()
@@ -322,6 +352,12 @@ async def get_status():
         "circuit_breaker_until": bot_engine.circuit_breaker_until.isoformat() if bot_engine.circuit_breaker_until else None,
         "allowed_magic_numbers": ALLOWED_MAGIC_NUMBERS,
         "server_time": datetime.now(timezone.utc).isoformat(),
+        "performance": {
+            "total_trades": total_trades,
+            "win_rate_pct": round(win_rate, 2),
+            "profit_factor": round(profit_factor, 2),
+            "sharpe_proxy": round(sharpe_proxy, 2),
+        }
     }
 
 

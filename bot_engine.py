@@ -12,6 +12,8 @@ import math
 import random
 from typing import Dict, List, Optional, Tuple, Any, Callable
 
+import notifier
+
 import pytz
 
 try:
@@ -198,6 +200,13 @@ class BotEngine:
             logger.critical(msg)
             log_system_event("RiskEngine", msg, level="CRITICAL")
             log_circuit_breaker_event(drawdown_amount=round(loss, 2), state="CIRCUIT_BREAKER_HALTED")
+            
+            asyncio.create_task(notifier.send_telegram_alert(
+                f"🚨 <b>CIRCUIT BREAKER TRIGGERED</b>\n"
+                f"Daily drawdown reached: <b>${loss:.2f}</b>\n"
+                f"Limit: ${DAILY_DRAWDOWN_LIMIT_USD:.2f}\n"
+                f"All bot positions are being closed and trading is halted for {CIRCUIT_BREAKER_HALT_HOURS} hours."
+            ))
 
             # Emergency close bot trades
             await self.close_all_bot_positions(reason=f"Daily Drawdown Circuit Breaker Triggered (${DAILY_DRAWDOWN_LIMIT_USD:.2f} USD)")
@@ -226,6 +235,18 @@ class BotEngine:
             self.state = "CIRCUIT_BREAKER_HALTED"
             logger.critical(f"Circuit Breaker Triggered! Loss ${loss:.2f} >= ${DAILY_DRAWDOWN_LIMIT_USD:.2f}")
             log_circuit_breaker_event(drawdown_amount=round(loss, 2), state="CIRCUIT_BREAKER_HALTED")
+            
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(notifier.send_telegram_alert(
+                    f"🚨 <b>CIRCUIT BREAKER TRIGGERED</b>\n"
+                    f"Daily drawdown reached: <b>${loss:.2f}</b>\n"
+                    f"Limit: ${DAILY_DRAWDOWN_LIMIT_USD:.2f}\n"
+                    f"All bot positions are being closed and trading is halted."
+                ))
+            except RuntimeError:
+                pass # No running event loop
+
             self.emergency_close_all()
             return True
         return False
@@ -289,6 +310,12 @@ class BotEngine:
             return 0.01
 
         risk_capital = balance * (risk_pct / 100.0)
+
+        if acct:
+            drawdown = max(0.0, self.starting_daily_balance - getattr(acct, "equity", balance))
+            if drawdown >= (0.5 * DAILY_DRAWDOWN_LIMIT_USD):
+                risk_capital *= 0.5
+                logger.info(f"Risk scaled down 50% for {symbol} due to floating drawdown (${drawdown:.2f})")
 
         tick_size = 0.01
         sym_info = self.mt5_client.symbol_info(symbol) if self.mt5_client else None
@@ -529,6 +556,20 @@ class BotEngine:
         if len(self.get_bot_positions(symbol=symbol)) > 0:
             return
 
+        # Cross-Asset Correlation Filter (Long USD limit)
+        is_long_usd_signal = (symbol == "XAUUSD" and direction == "SELL") or (symbol == "USDJPY" and direction == "BUY")
+        if is_long_usd_signal:
+            active_bot_positions = self.get_bot_positions()
+            for pos in active_bot_positions:
+                pos_sym = getattr(pos, "symbol", "")
+                pos_type = getattr(pos, "type", -1)
+                is_pos_sell = pos_type == getattr(self.mt5_client, "ORDER_TYPE_SELL", 1)
+                is_pos_buy = pos_type == getattr(self.mt5_client, "ORDER_TYPE_BUY", 0)
+                
+                if (pos_sym == "XAUUSD" and is_pos_sell) or (pos_sym == "USDJPY" and is_pos_buy):
+                    logger.warning(f"Cross-Asset Correlation Block: Cannot execute {direction} {symbol}, already holding Long USD exposure.")
+                    return
+
         # Dynamic Spread Protection Check
         spread_ok, curr_spread, max_spread, spread_reason = self.validate_spread_protection(symbol)
         if not spread_ok:
@@ -587,8 +628,25 @@ class BotEngine:
 
         if retcode == done_code:
             order_ticket = getattr(res, "order", 0)
-            logger.info(f"NEW TRADE FILLED: {symbol} {direction} {lot} Lots @ {price:.3f} | SL: {sl:.3f} | TP: {tp:.3f} | Magic: {magic}")
-            log_system_event("BotEngine", f"Opened {symbol} {direction} {lot}L @ {price}. Ticket #{order_ticket}")
+            actual_fill = getattr(res, "price", price)
+            
+            slippage = (actual_fill - price) if direction == "BUY" else (price - actual_fill)
+            if slippage > 1.0:
+                logger.warning(f"HIGH SLIPPAGE DETECTED: {symbol} requested {price}, filled {actual_fill} (Slippage: {slippage:.3f} pts)")
+                log_trading_log(symbol=symbol, message=f"High slippage: {slippage:.3f} pts", level="WARNING")
+
+            logger.info(f"NEW TRADE FILLED: {symbol} {direction} {lot} Lots @ {actual_fill:.3f} (Req: {price:.3f}) | SL: {sl:.3f} | TP: {tp:.3f} | Magic: {magic}")
+            log_system_event("BotEngine", f"Opened {symbol} {direction} {lot}L @ {actual_fill}. Ticket #{order_ticket}")
+            
+            asyncio.create_task(notifier.send_telegram_alert(
+                f"🚀 <b>NEW TRADE FILLED</b>\n"
+                f"Symbol: <b>{symbol}</b>\n"
+                f"Action: {direction}\n"
+                f"Lots: {lot}\n"
+                f"Price: {actual_fill:.3f}\n"
+                f"SL: {sl:.3f} | TP: {tp:.3f}\n"
+                f"Slippage: {slippage:.3f} pts"
+            ))
 
             try:
                 with SessionLocal() as db:
@@ -597,7 +655,7 @@ class BotEngine:
                         symbol=symbol,
                         action=direction,
                         volume=lot,
-                        open_price=price,
+                        open_price=actual_fill,
                         sl=sl,
                         tp=tp,
                         pnl=0.0,

@@ -488,3 +488,134 @@ def test_sensitive_credentials_environment_isolation():
 
     # 3. Verify .env file exists and is populated
     assert os.path.exists(".env")
+
+
+def test_cross_asset_correlation_filter_blocks_long_usd():
+    """Verify that a new BUY USDJPY is blocked when a SELL XAUUSD (Long USD) position is already open."""
+    class CorrelationMT5:
+        connected = True
+        ORDER_TYPE_SELL = 1
+        ORDER_TYPE_BUY = 0
+        TRADE_ACTION_DEAL = 1
+        ORDER_TIME_GTC = 0
+        TRADE_RETCODE_DONE = 10009
+        def initialize(self): return True
+        def login(self, *a, **kw): return True
+        def account_info(self): return SimpleNamespace(balance=1000.0, equity=998.0)
+        def symbol_info_tick(self, s): return SimpleNamespace(ask=155.00, bid=154.98)
+        def symbol_info(self, s): return SimpleNamespace(trade_tick_size=0.01, trade_tick_value=1.0, volume_min=0.01, volume_max=10.0, volume_step=0.01, spread=15.0)
+        def positions_get(self, **kw):
+            # Active SELL XAUUSD (Long USD) position
+            return [SimpleNamespace(ticket=999, symbol="XAUUSD", magic=100201, type=1, profit=-1.0,
+                                    price_open=2340.0, volume=0.01, sl=0.0, tp=0.0)]
+        def terminal_info(self): return SimpleNamespace(connected=True)
+        def order_send(self, r): return SimpleNamespace(retcode=10009, order=1001, price=155.00)
+        def history_deals_get(self, *a, **kw): return []
+
+    engine = BotEngine()
+    engine.mt5_client = CorrelationMT5()
+    engine.starting_daily_balance = 1000.0
+    engine.state = "ACTIVE"
+
+    orders_sent = []
+    original_order_send = engine.mt5_client.order_send
+    def track_orders(r):
+        orders_sent.append(r)
+        return original_order_send(r)
+    engine.mt5_client.order_send = track_orders
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(engine.execute_trade_signal("USDJPY", "BUY", "TEST"))
+
+    assert len(orders_sent) == 0, "Order should have been blocked by correlation filter"
+
+
+def test_dynamic_risk_scaling_halves_lot_when_over_50pct_drawdown():
+    """Verify lot size is halved when floating drawdown exceeds 50% of the daily limit ($2.25)."""
+    engine = BotEngine()
+    engine.starting_daily_balance = 1000.0
+
+    class NormalMT5:
+        def account_info(self): return SimpleNamespace(balance=1000.0, equity=1000.0)
+        def symbol_info(self, s): return SimpleNamespace(trade_tick_size=0.01, trade_tick_value=1.0, volume_min=0.01, volume_max=10.0, volume_step=0.01)
+        def symbol_info_tick(self, s): return SimpleNamespace(ask=2350.0, bid=2349.5)
+    
+    class HighDrawdownMT5:
+        def account_info(self): return SimpleNamespace(balance=1000.0, equity=997.50)  # $2.50 drawdown (> $2.25 = 50%)
+        def symbol_info(self, s): return SimpleNamespace(trade_tick_size=0.01, trade_tick_value=1.0, volume_min=0.01, volume_max=10.0, volume_step=0.01)
+        def symbol_info_tick(self, s): return SimpleNamespace(ask=2350.0, bid=2349.5)
+
+    engine.mt5_client = NormalMT5()
+    normal_lot = engine.calculate_lot_size("XAUUSD", stop_loss_distance=3.5)
+
+    engine.mt5_client = HighDrawdownMT5()
+    scaled_lot = engine.calculate_lot_size("XAUUSD", stop_loss_distance=3.5)
+
+    assert scaled_lot < normal_lot, "Lot should be smaller when drawdown > 50% of daily limit"
+    assert scaled_lot >= 0.01, "Lot must not fall below MT5 minimum (0.01)"
+
+
+def test_sharpe_proxy_zero_division_guard():
+    """Verify Sharpe proxy calculation handles zero std deviation and empty trade list safely."""
+    import math
+
+    def sharpe_proxy(pnls):
+        total = len(pnls)
+        if total == 0:
+            return 0.0
+        mean_pnl = sum(pnls) / total
+        variance = sum((p - mean_pnl) ** 2 for p in pnls) / total
+        std_dev = math.sqrt(variance)
+        safe_std_dev = std_dev if std_dev > 0 else 1.0
+        return round(mean_pnl / safe_std_dev, 2)
+
+    # All identical outcomes -> std_dev = 0, should use guard = 1.0
+    assert sharpe_proxy([5.0, 5.0, 5.0]) == 5.0
+    # Empty trade list -> return 0
+    assert sharpe_proxy([]) == 0.0
+    # Single trade -> std_dev = 0, guard applies
+    assert sharpe_proxy([10.0]) == 10.0
+    # Normal case with variance
+    result = sharpe_proxy([10.0, -5.0, 8.0, -2.0])
+    assert isinstance(result, float)
+
+
+def test_slippage_logged_on_high_fill_difference():
+    """Verify high slippage is detected and logged when fill price deviates more than 1.0 pts from requested."""
+    from database import TradingLogModel, SessionLocal
+
+    # Simulate the slippage tracking logic
+    symbol = "XAUUSD"
+    requested_price = 2340.00
+    actual_fill = 2341.50  # 1.5 pts adverse slippage on BUY
+    direction = "BUY"
+
+    slippage = (actual_fill - requested_price) if direction == "BUY" else (requested_price - actual_fill)
+    assert slippage == 1.5
+
+    from database import log_trading_log
+    if slippage > 1.0:
+        log_trading_log(symbol=symbol, message=f"High slippage: {slippage:.3f} pts", level="WARNING")
+
+    with SessionLocal() as db:
+        records = db.query(TradingLogModel).filter(
+            TradingLogModel.symbol == symbol,
+            TradingLogModel.message.like("%High slippage%"),
+        ).all()
+        assert len(records) >= 1
+
+
+def test_status_endpoint_returns_performance_block():
+    """Verify /api/v1/status includes the performance telemetry block."""
+    client = TestClient(app)
+    response = client.get("/api/v1/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "performance" in data
+    perf = data["performance"]
+    assert "total_trades" in perf
+    assert "win_rate_pct" in perf
+    assert "profit_factor" in perf
+    assert "sharpe_proxy" in perf
+
