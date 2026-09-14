@@ -24,6 +24,8 @@ logger = logging.getLogger("TradingViewTA")
 
 # Minimum seconds between live API calls per (symbol, interval) pair.
 CACHE_TTL_SECONDS = 60
+# Short negative cache TTL for failures (e.g. 429 rate limits) to allow faster recovery
+CACHE_ERROR_TTL_SECONDS = 10
 
 INTERVAL_MAP = {
     "M15": getattr(Interval, "INTERVAL_15_MINUTES", "15m") if TV_AVAILABLE else "15m",
@@ -48,11 +50,16 @@ class TradingViewAnalyzer:
         return f"{symbol}:{interval_key}"
 
     def _is_cache_fresh(self, key: str) -> bool:
-        """Returns True if the cached result is younger than CACHE_TTL_SECONDS."""
+        """Returns True if the cached result is younger than applicable TTL."""
         last = self._fetch_time.get(key)
         if last is None:
             return False
         age = (datetime.now(timezone.utc) - last).total_seconds()
+        
+        status = self._result_cache.get(key, {}).get("status", "LIVE")
+        if status in ["STALE_CACHE", "FEED_UNAVAILABLE"]:
+            return age < CACHE_ERROR_TTL_SECONDS
+            
         return age < CACHE_TTL_SECONDS
 
     def _store_cache(self, key: str, result: Dict[str, Any]) -> None:
