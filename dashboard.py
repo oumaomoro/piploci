@@ -1,7 +1,8 @@
 """
 Piploci — Institutional Trading Desk
 Principal-grade dark-mode dashboard with real-time telemetry,
-risk controls, multi-timeframe signal cards, and Plotly analytics.
+risk controls, multi-timeframe signal cards, actionable guidance,
+mobile-responsive layout, and dynamic symbol configurator.
 """
 
 import os
@@ -225,6 +226,8 @@ div[data-testid="stDataFrame"] {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 8px;
+    flex-wrap: wrap;
+    gap: 4px;
 }
 .risk-title {
     font-family: 'Inter', sans-serif;
@@ -255,6 +258,8 @@ div[data-testid="stDataFrame"] {
     display: flex;
     justify-content: space-between;
     margin-top: 5px;
+    flex-wrap: wrap;
+    gap: 2px;
 }
 .risk-tier-label {
     font-family: 'JetBrains Mono', monospace;
@@ -275,6 +280,57 @@ div[data-testid="stDataFrame"] {
     margin-bottom: 12px;
 }
 
+/* ── Actionable Guidance Banners ── */
+.guidance-banner {
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    border: 1px solid;
+}
+.guidance-banner.offline {
+    background: rgba(100,116,139,0.06);
+    border-color: #1E293B;
+}
+.guidance-banner.circuit {
+    background: rgba(239,68,68,0.05);
+    border-color: rgba(239,68,68,0.25);
+}
+.guidance-banner.offsession {
+    background: rgba(245,158,11,0.04);
+    border-color: rgba(245,158,11,0.15);
+}
+.guidance-title {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin-bottom: 8px;
+}
+.guidance-body {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.72rem;
+    line-height: 1.65;
+    color: #64748B;
+}
+.guidance-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 4px 0;
+}
+.guidance-step-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.60rem;
+    font-weight: 700;
+    background: #0F1A27;
+    border: 1px solid #1E293B;
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: #38BDF8;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
 /* ── Instrument Card ── */
 .inst-card {
     background: #0D1420;
@@ -288,6 +344,7 @@ div[data-testid="stDataFrame"] {
     justify-content: space-between;
     align-items: flex-start;
     margin-bottom: 10px;
+    gap: 8px;
 }
 .inst-symbol {
     font-family: 'Inter', sans-serif;
@@ -393,13 +450,53 @@ div[data-testid="stDataFrame"] {
     color: #E8EDF3;
 }
 
-/* ── Responsive ── */
+/* ─────────────────────────────────────────────────
+   RESPONSIVE BREAKPOINTS
+   ───────────────────────────────────────────────── */
+
+/* ── 768px — Tablet ── */
 @media (max-width: 768px) {
     .mc-value { font-size: 1.05rem; }
+    .mc-sub   { font-size: 0.58rem; }
     .inst-symbol { font-size: 0.80rem; }
-    .status-bar { gap: 5px; }
+    .status-bar { gap: 5px; padding: 6px 10px; }
     .status-divider { display: none; }
     div[data-testid="stMetricValue"] { font-size: 0.95rem !important; }
+    .perf-stat-value { font-size: 0.95rem; }
+    .perf-stat { padding: 8px 12px; }
+    .guidance-title { font-size: 0.72rem; }
+    .guidance-body  { font-size: 0.68rem; }
+}
+
+/* ── 640px — Large Mobile ── */
+@media (max-width: 640px) {
+    .status-bar { flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 12px; }
+    .status-field { font-size: 0.60rem; }
+    .metric-card { padding: 10px 12px 8px 12px; }
+    .mc-value { font-size: 0.95rem; }
+    .mc-label { font-size: 0.55rem; }
+    .risk-reading { font-size: 0.60rem; }
+    .risk-tier-label { font-size: 0.50rem; }
+    .inst-card { padding: 12px 14px; }
+    .inst-symbol { font-size: 0.78rem; }
+    .inst-reason { font-size: 0.60rem; }
+    .tf-pill { font-size: 0.56rem; padding: 2px 6px; }
+    .badge { font-size: 0.58rem; padding: 2px 7px; }
+    div[data-testid="stTabs"] button[data-baseweb="tab"] { font-size: 0.65rem !important; padding: 6px 10px !important; }
+    .perf-stat-value { font-size: 0.88rem; }
+    .log-box { font-size: 0.58rem; max-height: 240px; }
+    .guidance-banner { padding: 12px 14px; }
+}
+
+/* ── 480px — Small Mobile ── */
+@media (max-width: 480px) {
+    .mc-value { font-size: 0.88rem; }
+    .mc-sub   { display: none; }
+    .risk-tiers { display: none; }
+    .inst-sub { display: none; }
+    div[data-testid="stMetricValue"] { font-size: 0.82rem !important; }
+    .perf-stat-row { gap: 8px; }
+    .perf-stat { min-width: 80px; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -471,7 +568,7 @@ def send_command(endpoint: str, payload: dict = None):
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("#### Piploci")
-    st.caption("Quantitative Execution Engine — v2.1")
+    st.caption("Quantitative Execution Engine — v2.2")
     st.divider()
 
     with st.expander("Gateway", expanded=False):
@@ -523,6 +620,61 @@ with st.sidebar:
 | USDJPY Magic | 100202 |
 """)
 
+    # ── Symbol Configurator ─────────────────────────────────────────────
+    st.divider()
+    with st.expander("Symbol Configurator", expanded=False):
+        st.caption("Edit per-symbol risk parameters. Changes persist to the engine database immediately.")
+
+        _cfgs_raw = query_api("configs") or []
+        if _cfgs_raw:
+            _sym_names = [c["symbol"] for c in _cfgs_raw]
+            _selected_sym = st.selectbox(
+                "Select symbol", _sym_names, key="cfg_sym_sel",
+                label_visibility="visible"
+            )
+            _cfg_edit = next((c for c in _cfgs_raw if c["symbol"] == _selected_sym), {})
+
+            with st.form(key="cfg_edit_form", clear_on_submit=False):
+                _new_risk = st.number_input(
+                    "Risk % per trade", min_value=0.1, max_value=5.0,
+                    value=float(_cfg_edit.get("risk_percent", 1.0)),
+                    step=0.1, format="%.1f", key="cfg_risk"
+                )
+                _new_spread = st.number_input(
+                    "Max spread (points)", min_value=0.1, max_value=500.0,
+                    value=float(_cfg_edit.get("max_spread", 35.0)),
+                    step=0.5, format="%.1f", key="cfg_spread"
+                )
+                _new_session = st.text_input(
+                    "Session window (EAT)",
+                    value=_cfg_edit.get("session_window", ""),
+                    key="cfg_session",
+                    placeholder="e.g. 15:30 - 19:30 EAT"
+                )
+                _new_active = st.checkbox(
+                    "Strategy active",
+                    value=bool(_cfg_edit.get("active", True)),
+                    key="cfg_active"
+                )
+                _submitted = st.form_submit_button("Save Changes", use_container_width=True)
+
+                if _submitted:
+                    _payload = {
+                        "symbol": _selected_sym,
+                        "risk_percent": _new_risk,
+                        "max_spread": _new_spread,
+                        "session_window": _new_session,
+                        "active": _new_active,
+                    }
+                    _ok, _res = send_command("configs/update", _payload)
+                    if _ok:
+                        st.success(f"Saved: {_selected_sym}")
+                        DASHBOARD_AUTH_TOKEN = None
+                    else:
+                        st.error(f"Save failed: {_res}")
+        else:
+            st.info("Engine offline — config unavailable.")
+
     st.divider()
     auto_refresh = st.toggle("Live Refresh (2s)", value=True)
 
@@ -557,24 +709,29 @@ def render_dashboard():
     cb_until      = status.get("circuit_breaker_until")
     perf          = status.get("performance", {})
 
-    now_eat = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+    now_utc = datetime.now(timezone.utc)
+    now_eat = now_utc.strftime("%H:%M:%S UTC")
 
     # Active session detection (EAT = UTC+3)
-    eat_hour = (datetime.now(timezone.utc).hour + 3) % 24
-    eat_min  = datetime.now(timezone.utc).minute
+    eat_hour = (now_utc.hour + 3) % 24
+    eat_min  = now_utc.minute
     eat_t    = eat_hour * 60 + eat_min
-    if 570 <= eat_t <= 690:        # 09:30-11:30 EAT (London Open)
+    if 570 <= eat_t <= 690:
         session_label = "LONDON OPEN"
         session_var   = "cyan"
-    elif 930 <= eat_t <= 1110:     # 15:30-18:30 EAT (London/NY Overlap)
+        in_prime_session = True
+    elif 930 <= eat_t <= 1110:
         session_label = "LONDON / NY OVERLAP"
         session_var   = "green"
-    elif 360 <= eat_t <= 420:      # 06:00-07:00 EAT (Tokyo/London)
+        in_prime_session = True
+    elif 360 <= eat_t <= 420:
         session_label = "TOKYO / LONDON"
         session_var   = "blue"
+        in_prime_session = True
     else:
         session_label = "OFF-SESSION"
         session_var   = "slate"
+        in_prime_session = False
 
     # ── Status Bar ──────────────────────────────────────────────────────
     term_b   = badge("Terminal Connected", "green") if term_conn else badge("Terminal Offline", "red")
@@ -608,6 +765,49 @@ def render_dashboard():
     # ── Page Header ─────────────────────────────────────────────────────
     st.markdown("## Trading Desk")
 
+    # ── Actionable Guidance Banners ──────────────────────────────────────
+    if not online:
+        st.markdown("""
+        <div class="guidance-banner offline">
+            <div class="guidance-title" style="color:#64748B;">Engine Offline — Action Required</div>
+            <div class="guidance-body">
+                The trading engine is not reachable. To restore connectivity, complete these steps:
+                <div class="guidance-step"><span class="guidance-step-num">1</span>Open your local machine and ensure <strong>server.py</strong> is running via <code>uvicorn server:app --host 0.0.0.0 --port 8000</code></div>
+                <div class="guidance-step"><span class="guidance-step-num">2</span>Verify MetaTrader 5 is open, logged in, and <strong>Algo Trading</strong> is enabled in the toolbar</div>
+                <div class="guidance-step"><span class="guidance-step-num">3</span>Confirm the Cloudflare tunnel is active (<code>cloudflared tunnel run</code>)</div>
+                <div class="guidance-step"><span class="guidance-step-num">4</span>Update the <strong>API Endpoint</strong> in the sidebar Gateway panel if the tunnel URL has changed</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    elif cb_active:
+        cb_display = cb_until[:16].replace("T", " ") + " UTC" if cb_until else "unknown"
+        st.markdown(f"""
+        <div class="guidance-banner circuit">
+            <div class="guidance-title" style="color:#F87171;">Circuit Breaker Active — Trading Halted</div>
+            <div class="guidance-body">
+                Daily drawdown limit has been reached. All new entries are blocked until the cooldown expires.
+                <div class="guidance-step"><span class="guidance-step-num">1</span>Trading automatically resumes at: <strong style="color:#F0F6FF;">{cb_display}</strong></div>
+                <div class="guidance-step"><span class="guidance-step-num">2</span>Review open positions in the <strong>Live Positions</strong> tab and close any you wish to manage manually</div>
+                <div class="guidance-step"><span class="guidance-step-num">3</span>Use the <strong>Resume</strong> button in the sidebar only if you are manually overriding the cooldown</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    elif not in_prime_session and online and engine_state == "RUNNING":
+        next_session_eat = "15:30 EAT" if eat_t < 930 else "03:00 EAT (next day)"
+        st.markdown(f"""
+        <div class="guidance-banner offsession">
+            <div class="guidance-title" style="color:#FBBF24;">Off-Session — Engine Monitoring</div>
+            <div class="guidance-body">
+                No prime trading session is active. The engine is live but will not open new positions until session hours.
+                <div class="guidance-step"><span class="guidance-step-num">1</span>Next prime session: <strong style="color:#F0F6FF;">{next_session_eat}</strong> (London/NY Overlap is highest-probability)</div>
+                <div class="guidance-step"><span class="guidance-step-num">2</span>Use this time to review signal alignment in the <strong>instrument cards</strong> below</div>
+                <div class="guidance-step"><span class="guidance-step-num">3</span>Check <strong>Performance</strong> tab for closed trade analytics from the prior session</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
     # ── Metric Cards ────────────────────────────────────────────────────
     pnl_cls   = "mc-positive" if pnl > 0 else ("mc-negative" if pnl < 0 else "mc-neutral")
     dd_cls    = "mc-negative" if dd > 2.25 else ("mc-positive" if dd == 0 else "mc-neutral")
@@ -624,11 +824,12 @@ def render_dashboard():
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
+        eq_sign = "+" if eq_change >= 0 else ""
+        eq_cls  = "mc-positive" if eq_change >= 0 else "mc-negative"
         st.markdown(mc(
             "Equity",
             f"${equity:,.2f}" if online else "---",
-            f'<span class="{"mc-positive" if eq_change>=0 else "mc-negative"}">'
-            f'{"+" if eq_change>=0 else ""}{eq_change:,.2f} vs balance</span>' if online else ""
+            f'<span class="{eq_cls}">{eq_sign}{eq_change:,.2f} vs balance</span>' if online else ""
         ), unsafe_allow_html=True)
     with col2:
         st.markdown(mc(
@@ -643,10 +844,11 @@ def render_dashboard():
             "Open positions combined" if online else ""
         ), unsafe_allow_html=True)
     with col4:
+        dd_used = (dd / dd_limit * 100) if dd_limit else 0
         st.markdown(mc(
             "Daily Drawdown",
             f'<span class="{dd_cls}">${dd:.2f}</span>' if online else "---",
-            f"Limit: ${dd_limit:.2f}  &nbsp;|&nbsp;  {(dd/dd_limit*100) if dd_limit else 0:.0f}% used" if online else ""
+            f"Limit: ${dd_limit:.2f} &nbsp;|&nbsp; {dd_used:.0f}% used" if online else ""
         ), unsafe_allow_html=True)
 
     st.markdown("")
@@ -680,16 +882,12 @@ def render_dashboard():
         </div>
         <div class="risk-tiers">
             <span class="risk-tier-label">$0.00</span>
-            <span class="risk-tier-label">$2.25 (50%)</span>
-            <span class="risk-tier-label">$3.60 (80%)</span>
+            <span class="risk-tier-label">${dd_limit*0.5:.2f} (50%)</span>
+            <span class="risk-tier-label">${dd_limit*0.8:.2f} (80%)</span>
             <span class="risk-tier-label">${dd_limit:.2f}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
-
-    # CB alert banner
-    if cb_active and cb_until:
-        st.error(f"Circuit Breaker Active — trading halted until {cb_until[:16].replace('T', ' ')} UTC", icon=None)
 
     st.markdown("")
 
@@ -699,6 +897,12 @@ def render_dashboard():
     configs = query_api("configs") or []
     cfg_map = {c["symbol"]: c for c in configs}
     signals = query_api("signals") or {}
+
+    # Fallback instrument display metadata if API is offline
+    _INSTRUMENT_DEFAULTS = {
+        "XAUUSD": {"label": "XAUUSD — Gold",         "sessions": "15:30 - 19:30 EAT",               "magic": 100201},
+        "USDJPY": {"label": "USDJPY — Dollar / Yen", "sessions": "03:00 - 07:00 / 15:30 - 19:30 EAT", "magic": 100202},
+    }
 
     def _tf_pill(tf_label: str, rec: str) -> str:
         rec_u = (rec or "NEUTRAL").upper()
@@ -752,11 +956,9 @@ def render_dashboard():
             </div>
             """, unsafe_allow_html=True)
 
-            # Quick-action buttons
             qa1, qa2, qa3 = st.columns(3)
             with qa1:
                 if st.button("Force Scan", key=f"scan_{symbol}", use_container_width=True):
-                    # Signals are re-evaluated on next engine tick — rerun refreshes
                     st.toast(f"{symbol}: scan requested.")
                     st.rerun()
             with qa2:
@@ -773,9 +975,30 @@ def render_dashboard():
                         st.toast(f"{symbol}: all positions closed.")
                         st.rerun()
 
-    col_a, col_b = st.columns(2)
-    render_instrument(col_a, "XAUUSD", "XAUUSD — Gold",         "15:30 – 19:30 EAT",               100201)
-    render_instrument(col_b, "USDJPY", "USDJPY — Dollar / Yen", "03:00 – 07:00 / 15:30 – 19:30 EAT", 100202)
+    # Determine instruments: prefer live DB configs, fallback to compiled defaults
+    if cfg_map:
+        instrument_symbols = list(cfg_map.keys())
+    else:
+        instrument_symbols = list(_INSTRUMENT_DEFAULTS.keys())
+
+    # Render in rows of 2 columns
+    for i in range(0, len(instrument_symbols), 2):
+        chunk = instrument_symbols[i:i+2]
+        cols  = st.columns(len(chunk))
+        for col, sym in zip(cols, chunk):
+            live    = cfg_map.get(sym, {})
+            default = _INSTRUMENT_DEFAULTS.get(sym, {
+                "label": sym,
+                "sessions": live.get("session_window", "—"),
+                "magic": live.get("magic", 0)
+            })
+            render_instrument(
+                col,
+                sym,
+                default["label"],
+                live.get("session_window") or default["sessions"],
+                live.get("magic") or default["magic"],
+            )
 
     st.markdown("")
 
@@ -790,7 +1013,6 @@ def render_dashboard():
         if positions:
             df_pos = pd.DataFrame(positions)
 
-            # Normalize side
             if "type" in df_pos.columns:
                 df_pos["Side"] = df_pos["type"].apply(
                     lambda t: "BUY" if str(t) in ["0", "buy", "BUY"] else "SELL"
@@ -804,7 +1026,6 @@ def render_dashboard():
             show_cols = [c for c in col_map if c in df_pos.columns]
             df_display = df_pos[show_cols].rename(columns=col_map).copy()
 
-            # Highlight P&L
             def _style_pnl(val):
                 try:
                     v = float(val)
@@ -815,7 +1036,6 @@ def render_dashboard():
             styled = df_display.style.applymap(_style_pnl, subset=["P&L ($)"] if "P&L ($)" in df_display.columns else [])
             st.dataframe(styled, use_container_width=True, hide_index=True)
 
-            # Close individual position
             st.markdown("")
             cp1, cp2, cp3 = st.columns([2, 1, 1])
             with cp1:
@@ -851,7 +1071,6 @@ def render_dashboard():
         pf           = perf.get("profit_factor", 0.0)
         sharpe       = perf.get("sharpe_proxy", 0.0)
 
-        # Stat row
         st.markdown(f"""
         <div class="perf-stat-row">
             <div class="perf-stat">
@@ -879,7 +1098,6 @@ def render_dashboard():
         </div>
         """, unsafe_allow_html=True)
 
-        # Pull closed trades for charting
         trades = query_api("trades") or []
         closed = [t for t in trades if t.get("status") == "CLOSED" and t.get("pnl") is not None]
 
@@ -892,7 +1110,6 @@ def render_dashboard():
                 running += p
                 cumulative.append(round(running, 4))
 
-            # Equity Curve
             eq_fig = go.Figure()
             eq_fig.add_trace(go.Scatter(
                 y=cumulative,
@@ -916,7 +1133,6 @@ def render_dashboard():
             )
             st.plotly_chart(eq_fig, use_container_width=True, config={"displayModeBar": False})
 
-            # P&L Distribution
             hist_fig = go.Figure()
             hist_fig.add_trace(go.Histogram(
                 x=pnls,
