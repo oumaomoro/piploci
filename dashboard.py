@@ -11,17 +11,19 @@ import requests
 import streamlit as st
 import pandas as pd
 
-# Dynamic API endpoint resolution (Supports Cloud Tunnel, Localhost, st.secrets & env vars)
-DEFAULT_API_URL = "https://badge-voltage-mia-father.trycloudflare.com/api/v1"
-LOCAL_API_URL = "http://127.0.0.1:8000/api/v1"
+# Dynamic API endpoint resolution
+# Priority: st.secrets["API_BASE"] → env var API_BASE → None (offline mode)
+_API_BASE_DEFAULT = None  # No hardcoded ephemeral URL — configure via secrets
 
 try:
     if hasattr(st, "secrets") and "API_BASE" in st.secrets:
-        API_BASE = st.secrets["API_BASE"]
+        API_BASE = st.secrets["API_BASE"].rstrip("/")
     else:
-        API_BASE = os.getenv("API_BASE", DEFAULT_API_URL)
+        API_BASE = os.getenv("API_BASE", _API_BASE_DEFAULT)
+        if API_BASE:
+            API_BASE = API_BASE.rstrip("/")
 except Exception:
-    API_BASE = os.getenv("API_BASE", DEFAULT_API_URL)
+    API_BASE = os.getenv("API_BASE", _API_BASE_DEFAULT)
 
 st.set_page_config(
     page_title="Piploci",
@@ -143,8 +145,8 @@ st.markdown("""
 # ==============================================================================
 def query_api(endpoint: str):
     global API_BASE
-    # Candidate endpoints in priority order: active API_BASE, Cloud Tunnel, Localhost
-    candidates = [API_BASE, DEFAULT_API_URL, LOCAL_API_URL]
+    # Priority: configured API_BASE, then localhost fallback for local dev
+    candidates = [API_BASE, "http://127.0.0.1:8000/api/v1"]
     seen = set()
     for base in candidates:
         if not base or base in seen:
@@ -159,19 +161,55 @@ def query_api(endpoint: str):
             continue
     return None
 
+# Credentials for Dashboard API control authentication
+DASHBOARD_AUTH_TOKEN = None
+
+def get_auth_headers(base_url: str) -> dict:
+    """Retrieves or refreshes JWT authentication token for control operations."""
+    global DASHBOARD_AUTH_TOKEN
+    if DASHBOARD_AUTH_TOKEN:
+        return {"Authorization": f"Bearer {DASHBOARD_AUTH_TOKEN}"}
+
+    admin_user = os.getenv("ADMIN_USER", "admin")
+    admin_pass = os.getenv("ADMIN_PASSWORD", "AdminPass@2026")
+    try:
+        login_res = requests.post(
+            f"{base_url}/login",
+            json={"username": admin_user, "password": admin_pass},
+            timeout=3.0,
+        )
+        if login_res.status_code == 200:
+            token_data = login_res.json()
+            DASHBOARD_AUTH_TOKEN = token_data.get("access_token")
+            return {"Authorization": f"Bearer {DASHBOARD_AUTH_TOKEN}"}
+    except Exception:
+        pass
+    return {}
+
+
 def send_command(endpoint: str, payload: dict = None):
-    global API_BASE
-    candidates = [API_BASE, DEFAULT_API_URL, LOCAL_API_URL]
+    global API_BASE, DASHBOARD_AUTH_TOKEN
+    # Priority: configured API_BASE, then localhost fallback for local dev
+    candidates = [API_BASE, "http://127.0.0.1:8000/api/v1"]
     seen = set()
     for base in candidates:
         if not base or base in seen:
             continue
         seen.add(base)
+        headers = get_auth_headers(base)
         try:
-            res = requests.post(f"{base}/{endpoint}", json=payload, timeout=3.0)
+            res = requests.post(f"{base}/{endpoint}", json=payload, headers=headers, timeout=3.0)
             if res.status_code == 200:
                 API_BASE = base
                 return True, res.json()
+            elif res.status_code == 401:
+                # Token expired or reset — refresh and retry once
+                DASHBOARD_AUTH_TOKEN = None
+                new_headers = get_auth_headers(base)
+                retry_res = requests.post(f"{base}/{endpoint}", json=payload, headers=new_headers, timeout=3.0)
+                if retry_res.status_code == 200:
+                    API_BASE = base
+                    return True, retry_res.json()
         except Exception:
             continue
     return False, "Failed to connect to gateway endpoints"

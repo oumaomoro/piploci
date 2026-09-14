@@ -235,15 +235,27 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def verify_token(token: str = Depends(oauth2_scheme)) -> str:
+def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
+    """FastAPI authentication dependency validating Bearer JWT access token."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return username
     except JWTError:
-        raise HTTPException(status_code=401, detail="Could not validate credentials")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+verify_token = get_current_user
 
 
 # ==============================================================================
@@ -321,7 +333,11 @@ async def get_configs(db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/control/toggle")
-async def toggle_asset_scan(payload: AssetToggleRequest, db: Session = Depends(get_db)):
+async def toggle_asset_scan(
+    payload: AssetToggleRequest,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user),
+):
     """Enables or disables automated strategy scanning for a symbol."""
     cfg = db.query(ConfigModel).filter_by(symbol=payload.symbol.upper()).first()
     if not cfg:
@@ -331,7 +347,7 @@ async def toggle_asset_scan(payload: AssetToggleRequest, db: Session = Depends(g
     db.commit()
 
     action_str = "ENABLED" if payload.active else "PAUSED"
-    msg = f"Asset scanning {action_str} for {cfg.symbol}"
+    msg = f"Asset scanning {action_str} for {cfg.symbol} by {current_user}"
     log_system_event("FastAPIServer", msg)
 
     await bot_engine.broadcast_event("CONFIG_UPDATED", {
@@ -344,22 +360,23 @@ async def toggle_asset_scan(payload: AssetToggleRequest, db: Session = Depends(g
 
 
 @app.post("/api/v1/control/emergency-stop")
-async def emergency_stop():
+async def emergency_stop(current_user: str = Depends(get_current_user)):
     """
     Emergency Kill Switch:
     Immediately closes ALL positions with magic numbers 100201 and 100202,
     and sets system state to HALTED.
     """
+    logger.warning(f"Emergency stop invoked by user: {current_user}")
     result = await bot_engine.trigger_emergency_stop()
     return result
 
 
 @app.post("/api/v1/control/resume")
-async def resume_trading():
+async def resume_trading(current_user: str = Depends(get_current_user)):
     """Resumes trading if the bot was halted."""
     bot_engine.state = "RUNNING"
     bot_engine.circuit_breaker_until = None
-    msg = "Trading resumed by user manual command."
+    msg = f"Trading resumed by user: {current_user}"
     log_system_event("FastAPIServer", msg)
     await bot_engine.broadcast_event("SYSTEM_RESUMED", {"message": msg})
     return {"status": "RUNNING", "message": msg}
@@ -387,9 +404,12 @@ async def get_open_positions():
 
 
 @app.post("/api/v1/control/close-position")
-async def close_position(payload: PositionCloseRequest):
+async def close_position(
+    payload: PositionCloseRequest,
+    current_user: str = Depends(get_current_user),
+):
     """Closes a specific bot position by ticket number while enforcing Magic isolation."""
-    success = await bot_engine.close_position_by_ticket(payload.ticket, reason="Manual Close via Dashboard")
+    success = await bot_engine.close_position_by_ticket(payload.ticket, reason=f"Manual Close via Dashboard by {current_user}")
     if not success:
         raise HTTPException(
             status_code=400,

@@ -6,6 +6,7 @@ Supports both Pydantic BaseSettings and standalone exported constants.
 import json
 import logging
 import os
+import urllib.parse
 from typing import Dict, Any, List, Tuple, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -64,7 +65,21 @@ class Settings(BaseSettings):
     SECRET_KEY: str = os.getenv("SECRET_KEY", "trading_bot_super_secret_key_2026_jwt_token_secure")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./trading_bot.db")
+    # Supabase Infrastructure Configuration
+    SUPABASE_PROJECT_ID: str = os.getenv("SUPABASE_PROJECT_ID", "npjsxpsqleckvhlevdyz")
+    SUPABASE_DB_HOST: str = os.getenv("SUPABASE_DB_HOST", "db.npjsxpsqleckvhlevdyz.supabase.co")
+    SUPABASE_DB_PASSWORD: str = os.getenv("SUPABASE_DB_PASSWORD", "piploci34@!")
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "https://npjsxpsqleckvhlevdyz.supabase.co")
+    SUPABASE_PUBLISHABLE_KEY: str = os.getenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_uw9ppL7mH5XalugyWb7ECw_AQglanlT")
+    SUPABASE_SERVICE_ROLE_KEY: str = os.getenv(
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wanN4cHNxbGVja3ZobGV2ZHl6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTM3NzIyOSwiZXhwIjoyMTA0OTUzMjI5fQ.3XDMjL-BgtkScTqa4jej-kSiNATZW4lMNIgYTvSMMFM"
+    )
+
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        f"postgresql+psycopg2://postgres:{urllib.parse.quote_plus(os.getenv('SUPABASE_DB_PASSWORD', 'piploci34@!'))}@{os.getenv('SUPABASE_DB_HOST', 'db.npjsxpsqleckvhlevdyz.supabase.co')}:5432/postgres"
+    )
     
     # Global Risk Controls
     DAILY_DRAWDOWN_LIMIT_USD: float = 4.50
@@ -130,6 +145,14 @@ ALGORITHM = settings.ALGORITHM
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 DATABASE_URL = settings.DATABASE_URL
 
+# Supabase Infrastructure Exports
+SUPABASE_PROJECT_ID = settings.SUPABASE_PROJECT_ID
+SUPABASE_DB_HOST = settings.SUPABASE_DB_HOST
+SUPABASE_DB_PASSWORD = settings.SUPABASE_DB_PASSWORD
+SUPABASE_URL = settings.SUPABASE_URL
+SUPABASE_PUBLISHABLE_KEY = settings.SUPABASE_PUBLISHABLE_KEY
+SUPABASE_SERVICE_ROLE_KEY = settings.SUPABASE_SERVICE_ROLE_KEY
+
 DEFAULT_ADMIN_USER = settings.DEFAULT_ADMIN_USER
 DEFAULT_ADMIN_PASSWORD = settings.DEFAULT_ADMIN_PASSWORD
 
@@ -168,8 +191,8 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
         "magic_number": MAGIC_XAUUSD,
         "lot_type": "dynamic_atr",
         "risk_percent": 1.0,
-        "max_spread_price": 0.30,       # $0.30 max spread for Gold
-        "max_spread_points": 30.0,
+        "max_spread_price": 0.35,       # $0.35 max spread for Gold (35 points)
+        "max_spread_points": 35.0,
         "min_reversal_wick_ratio": 0.55,
         "atr_period": 14,
         "atr_sl_multiplier": 1.5,

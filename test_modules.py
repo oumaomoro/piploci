@@ -15,7 +15,16 @@ from config import (
     ALLOWED_MAGIC_NUMBERS,
     DAILY_DRAWDOWN_LIMIT_USD,
 )
-from database import init_database, SessionLocal, ConfigModel
+from database import (
+    init_database,
+    SessionLocal,
+    ConfigModel,
+    StrategyConfigModel,
+    TradingLogModel,
+    CircuitBreakerEventModel,
+    log_trading_log,
+    log_circuit_breaker_event,
+)
 from news_filter import EconomicNewsFilter
 from types import SimpleNamespace
 from tradingview_ta_module import TradingViewAnalyzer
@@ -38,20 +47,57 @@ def test_magic_numbers_isolated():
 
 
 def test_database_auto_seeding():
-    """Verify auto-seeding of default configs for XAUUSD and USDJPY."""
+    """Verify auto-seeding of default configs for XAUUSD and USDJPY in strategy_configs."""
     with SessionLocal() as session:
-        gold = session.query(ConfigModel).filter_by(symbol="XAUUSD").first()
-        jpy = session.query(ConfigModel).filter_by(symbol="USDJPY").first()
+        gold = session.query(StrategyConfigModel).filter_by(symbol="XAUUSD").first()
+        jpy = session.query(StrategyConfigModel).filter_by(symbol="USDJPY").first()
 
         assert gold is not None
+        assert gold.magic == 100201
         assert gold.magic_number == 100201
         assert gold.active is True
         assert gold.max_spread == 35.0
+        assert "15:30" in gold.session_window
 
         assert jpy is not None
+        assert jpy.magic == 100202
         assert jpy.magic_number == 100202
         assert jpy.active is True
         assert jpy.max_spread == 20.0
+        assert "03:00" in jpy.session_window
+
+
+def test_database_supabase_postgres_and_models():
+    """Verify essential schema tables and logging functions (strategy_configs, trading_logs, circuit_breaker_events)."""
+    assert StrategyConfigModel.__tablename__ == "strategy_configs"
+    assert TradingLogModel.__tablename__ == "trading_logs"
+    assert CircuitBreakerEventModel.__tablename__ == "circuit_breaker_events"
+
+    # Test trading_logs insertion
+    log_trading_log("XAUUSD", "Spread guard rejected execution: 0.40 > 0.35", level="WARNING")
+    with SessionLocal() as session:
+        t_log = session.query(TradingLogModel).filter_by(symbol="XAUUSD", level="WARNING").order_by(TradingLogModel.id.desc()).first()
+        assert t_log is not None
+        assert "Spread guard rejected" in t_log.message
+
+    # Test circuit_breaker_events insertion
+    log_circuit_breaker_event(drawdown_amount=4.75, state="CIRCUIT_BREAKER_HALTED")
+    with SessionLocal() as session:
+        cb_event = session.query(CircuitBreakerEventModel).order_by(CircuitBreakerEventModel.id.desc()).first()
+        assert cb_event is not None
+        assert cb_event.drawdown_amount == 4.75
+        assert cb_event.state == "CIRCUIT_BREAKER_HALTED"
+
+
+def test_supabase_connection_pooling_configuration():
+    """Verify SQLAlchemy engine connection pooling configuration with pool_pre_ping=True and pool_size=10."""
+    from sqlalchemy import create_engine
+    
+    test_pg_url = "postgresql+psycopg2://postgres:piploci34%40!@db.npjsxpsqleckvhlevdyz.supabase.co:5432/postgres"
+    pg_engine = create_engine(test_pg_url, pool_pre_ping=True, pool_size=10, max_overflow=5)
+    
+    assert pg_engine.pool._pre_ping is True
+    assert pg_engine.pool.size() == 10
 
 
 def test_dynamic_atr_lot_sizing():
@@ -265,24 +311,38 @@ def test_api_configs_endpoint():
 
 
 def test_api_control_toggle():
+    # Authenticate first to obtain JWT
+    auth = client.post("/api/v1/auth/login-json", json={"username": "admin", "password": "AdminPass@2026"})
+    assert auth.status_code == 200, f"Login failed: {auth.text}"
+    token = auth.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
     # Toggle XAUUSD off
-    res = client.post("/api/v1/control/toggle", json={"symbol": "XAUUSD", "active": False})
-    assert res.status_code == 200
+    res = client.post("/api/v1/control/toggle", json={"symbol": "XAUUSD", "active": False}, headers=headers)
+    assert res.status_code == 200, f"Toggle OFF failed: {res.text}"
     assert res.json()["active"] is False
 
     # Toggle XAUUSD back on
-    res = client.post("/api/v1/control/toggle", json={"symbol": "XAUUSD", "active": True})
-    assert res.status_code == 200
+    res = client.post("/api/v1/control/toggle", json={"symbol": "XAUUSD", "active": True}, headers=headers)
+    assert res.status_code == 200, f"Toggle ON failed: {res.text}"
     assert res.json()["active"] is True
 
 
 def test_api_emergency_stop_and_resume():
-    res_stop = client.post("/api/v1/control/emergency-stop")
-    assert res_stop.status_code == 200
+    # Authenticate first to obtain JWT
+    auth = client.post("/api/v1/auth/login-json", json={"username": "admin", "password": "AdminPass@2026"})
+    assert auth.status_code == 200, f"Login failed: {auth.text}"
+    token = auth.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Emergency stop — requires auth
+    res_stop = client.post("/api/v1/control/emergency-stop", headers=headers)
+    assert res_stop.status_code == 200, f"Emergency stop failed: {res_stop.text}"
     assert res_stop.json()["status"] == "HALTED"
 
-    res_resume = client.post("/api/v1/control/resume")
-    assert res_resume.status_code == 200
+    # Resume — requires auth
+    res_resume = client.post("/api/v1/control/resume", headers=headers)
+    assert res_resume.status_code == 200, f"Resume failed: {res_resume.text}"
     assert res_resume.json()["status"] == "RUNNING"
 
 

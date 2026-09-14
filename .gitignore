@@ -4,6 +4,8 @@
 !.env.example
 *.pem
 *.key
+.streamlit/secrets.toml
+
 
 # Database & Storage
 *.db

@@ -39,7 +39,17 @@ from config import (
     MT5_HEARTBEAT_INTERVAL_SECONDS,
     settings,
 )
-from database import SessionLocal, ConfigModel, TradeLogModel, log_system_event
+from database import (
+    SessionLocal,
+    ConfigModel,
+    StrategyConfigModel,
+    TradeLogModel,
+    TradingLogModel,
+    CircuitBreakerEventModel,
+    log_system_event,
+    log_trading_log,
+    log_circuit_breaker_event,
+)
 from news_filter import news_filter, news_shield
 from tradingview_ta_module import tv_analyzer, get_aligned_signal
 
@@ -187,6 +197,7 @@ class BotEngine:
             )
             logger.critical(msg)
             log_system_event("RiskEngine", msg, level="CRITICAL")
+            log_circuit_breaker_event(drawdown_amount=round(loss, 2), state="CIRCUIT_BREAKER_HALTED")
 
             # Emergency close bot trades
             await self.close_all_bot_positions(reason=f"Daily Drawdown Circuit Breaker Triggered (${DAILY_DRAWDOWN_LIMIT_USD:.2f} USD)")
@@ -214,6 +225,7 @@ class BotEngine:
             self.halt_expiration = datetime.now(timezone.utc) + timedelta(hours=CIRCUIT_BREAKER_HALT_HOURS)
             self.state = "CIRCUIT_BREAKER_HALTED"
             logger.critical(f"Circuit Breaker Triggered! Loss ${loss:.2f} >= ${DAILY_DRAWDOWN_LIMIT_USD:.2f}")
+            log_circuit_breaker_event(drawdown_amount=round(loss, 2), state="CIRCUIT_BREAKER_HALTED")
             self.emergency_close_all()
             return True
         return False
@@ -482,8 +494,9 @@ class BotEngine:
     def validate_spread_protection(self, symbol: str) -> Tuple[bool, float, float, str]:
         """
         Dynamic Spread Protection:
-        Verifies that current bid-ask spread does not exceed maximum allowable thresholds
-        (e.g., $0.30 for Gold, 2.0 pips / 0.020 for USDJPY) to prevent opening positions during spread spikes.
+        Verifies that current bid-ask spread does not exceed maximum allowable thresholds:
+        - Gold (XAUUSD): Reject execution if current spread > $0.35 (35 points).
+        - USDJPY (USDJPY): Reject execution if current spread > 2.0 pips / 0.020 (20 points).
         Returns: (is_allowed, current_spread, max_spread, reason)
         """
         if not self.mt5_client:
@@ -498,13 +511,14 @@ class BotEngine:
         live_spread = round(ask - bid, 4)
 
         cfg = SYMBOL_CONFIGS.get(symbol, {})
-        default_max_price = 0.30 if "XAU" in symbol else 0.020
+        default_max_price = 0.35 if "XAU" in symbol else 0.020
         max_allowed = cfg.get("max_spread_price", default_max_price)
 
         if live_spread > max_allowed:
             reason = f"SPREAD SPIKE on {symbol}: current {live_spread:.4f} > max allowed {max_allowed:.4f}"
             logger.warning(reason)
             log_system_event("RiskEngine", reason, level="WARNING")
+            log_trading_log(symbol=symbol, message=reason, level="WARNING")
             return False, live_spread, max_allowed, reason
 
         return True, live_spread, max_allowed, f"Spread OK ({live_spread:.4f} <= {max_allowed:.4f})"
@@ -518,7 +532,14 @@ class BotEngine:
         # Dynamic Spread Protection Check
         spread_ok, curr_spread, max_spread, spread_reason = self.validate_spread_protection(symbol)
         if not spread_ok:
-            logger.info(f"Skipping trade on {symbol}: {spread_reason}")
+            logger.warning(f"Skipping trade execution on {symbol}: {spread_reason}")
+            await self.broadcast_event("SPREAD_REJECTED", {
+                "symbol": symbol,
+                "current_spread": curr_spread,
+                "max_allowed": max_spread,
+                "message": spread_reason,
+                "alert": f"Trade blocked: Excessive spread on {symbol} ({curr_spread:.4f} > {max_spread:.4f})",
+            })
             return
 
         cfg = SYMBOL_CONFIGS.get(symbol, {})
