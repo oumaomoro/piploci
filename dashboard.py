@@ -1,7 +1,7 @@
 """
-Institutional Real-Time Monitoring & Execution Dashboard for Piploci.
-Professional Bloomberg/Terminal aesthetic with zero emojis, high-contrast typography,
-live terminal telemetry, strict circuit breaker metrics, and real-time asset controls.
+Piploci — Institutional Trading Dashboard.
+Clean, responsive, dark-theme monitoring interface with
+real-time telemetry, risk controls, and position management.
 """
 
 import os
@@ -11,9 +11,8 @@ import requests
 import streamlit as st
 import pandas as pd
 
-# Dynamic API endpoint resolution
-# Priority: st.secrets["API_BASE"] → env var API_BASE → None (offline mode)
-_API_BASE_DEFAULT = None  # No hardcoded ephemeral URL — configure via secrets
+# ── API Endpoint Resolution ──────────────────────────────────────────────────
+_API_BASE_DEFAULT = "https://badge-voltage-mia-father.trycloudflare.com/api/v1"
 
 try:
     if hasattr(st, "secrets") and "API_BASE" in st.secrets:
@@ -27,126 +26,237 @@ except Exception:
 
 st.set_page_config(
     page_title="Piploci",
+    page_icon="◆",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# Professional Institutional Dark Theme (No Emojis, Pure Financial Precision)
+# ── Design System ────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Global Reset & Base Palette */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+    /* ── Global ── */
     .stApp {
-        background-color: #06090E;
-        color: #E2E8F0;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
+        background: #0A0E17;
+        color: #C8D1DC;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    
-    /* Headers & Typography */
+    section[data-testid="stSidebar"] {
+        background: #0D1117;
+        border-right: 1px solid #1C2333;
+    }
     h1, h2, h3, h4, h5, h6 {
+        font-family: 'Inter', sans-serif;
         font-weight: 600;
-        letter-spacing: -0.02em;
-        color: #F8FAFC;
-    }
-    
-    /* Metrics */
-    div[data-testid="stMetricValue"] {
-        font-family: "JetBrains Mono", "SF Mono", "Consolas", monospace !important;
-        font-size: 1.55rem !important;
-        font-weight: 700 !important;
-        color: #FFFFFF !important;
-        letter-spacing: -0.03em;
-    }
-    div[data-testid="stMetricLabel"] {
-        font-size: 0.72rem !important;
-        color: #64748B !important;
-        font-weight: 600 !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.08em !important;
+        color: #E8EDF3;
+        letter-spacing: -0.01em;
     }
 
-    /* Cards & Containers */
-    div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"] {
-        background-color: #0B0F19;
-        border: 1px solid #1E293B;
-        border-radius: 6px;
-        padding: 16px;
+    /* ── Metrics ── */
+    div[data-testid="stMetricValue"] {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 1.3rem !important;
+        font-weight: 600 !important;
+        color: #F0F4F8 !important;
     }
-    
-    /* Institutional Status Badges */
-    .status-pill {
+    div[data-testid="stMetricLabel"] {
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.68rem !important;
+        color: #6B7A8D !important;
+        font-weight: 500 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+    }
+    div[data-testid="stMetricDelta"] {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.72rem !important;
+    }
+
+    /* ── Cards ── */
+    div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"] {
+        background: #111827;
+        border: 1px solid #1F2937;
+        border-radius: 8px;
+        padding: 20px;
+    }
+
+    /* ── Tabs ── */
+    button[data-baseweb="tab"] {
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.75rem !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.04em !important;
+    }
+
+    /* ── Badges ── */
+    .badge {
         display: inline-flex;
         align-items: center;
-        padding: 3px 9px;
-        border-radius: 4px;
-        font-family: "JetBrains Mono", monospace;
-        font-size: 0.70rem;
+        gap: 5px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-family: 'Inter', sans-serif;
+        font-size: 0.65rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        line-height: 1;
+    }
+    .badge-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        display: inline-block;
+    }
+    .b-green  { background: rgba(16,185,129,0.10); color: #34D399; border: 1px solid rgba(16,185,129,0.25); }
+    .b-green .badge-dot { background: #10B981; }
+    .b-red    { background: rgba(239,68,68,0.10); color: #F87171; border: 1px solid rgba(239,68,68,0.25); }
+    .b-red .badge-dot { background: #EF4444; }
+    .b-amber  { background: rgba(245,158,11,0.10); color: #FBBF24; border: 1px solid rgba(245,158,11,0.25); }
+    .b-amber .badge-dot { background: #F59E0B; }
+    .b-slate  { background: rgba(100,116,139,0.10); color: #94A3B8; border: 1px solid rgba(100,116,139,0.20); }
+    .b-slate .badge-dot { background: #64748B; }
+    .b-cyan   { background: rgba(6,182,212,0.10); color: #22D3EE; border: 1px solid rgba(6,182,212,0.25); }
+    .b-cyan .badge-dot { background: #06B6D4; }
+
+    /* ── Section Header ── */
+    .section-label {
+        font-family: 'Inter', sans-serif;
+        font-size: 0.68rem;
         font-weight: 600;
         letter-spacing: 0.06em;
         text-transform: uppercase;
-    }
-    .pill-active {
-        background-color: rgba(16, 185, 129, 0.12);
-        color: #10B981;
-        border: 1px solid rgba(16, 185, 129, 0.35);
-    }
-    .pill-neutral {
-        background-color: rgba(56, 189, 248, 0.12);
-        color: #38BDF8;
-        border: 1px solid rgba(56, 189, 248, 0.35);
-    }
-    .pill-warning {
-        background-color: rgba(245, 158, 11, 0.12);
-        color: #F59E0B;
-        border: 1px solid rgba(245, 158, 11, 0.35);
-    }
-    .pill-critical {
-        background-color: rgba(239, 68, 68, 0.12);
-        color: #EF4444;
-        border: 1px solid rgba(239, 68, 68, 0.35);
-    }
-    .pill-muted {
-        background-color: rgba(100, 116, 139, 0.12);
-        color: #94A3B8;
-        border: 1px solid rgba(100, 116, 139, 0.3);
+        color: #4B5563;
+        margin-bottom: 12px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid #1F2937;
     }
 
-    /* Table & Monospace Display */
-    .dataframe {
-        font-family: "JetBrains Mono", monospace !important;
-        font-size: 0.80rem !important;
+    /* ── Asset Card ── */
+    .asset-card {
+        background: #111827;
+        border: 1px solid #1F2937;
+        border-radius: 8px;
+        padding: 18px 20px;
     }
-    
-    /* Audit Log Terminal Box */
-    .audit-terminal {
-        background-color: #030508;
-        border: 1px solid #1E2638;
-        border-radius: 4px;
-        padding: 14px;
-        font-family: "JetBrains Mono", Consolas, monospace;
-        font-size: 11.5px;
-        color: #CBD5E1;
-        line-height: 1.6;
+    .asset-name {
+        font-family: 'Inter', sans-serif;
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: #F0F4F8;
+        margin-bottom: 2px;
     }
-    
-    /* Buttons */
+    .asset-sub {
+        font-family: 'Inter', sans-serif;
+        font-size: 0.65rem;
+        color: #6B7A8D;
+        letter-spacing: 0.03em;
+    }
+    .asset-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
+        flex-wrap: wrap;
+    }
+    .asset-field {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.68rem;
+        color: #94A3B8;
+    }
+    .asset-field strong {
+        color: #C8D1DC;
+    }
+
+    /* ── Risk Meter ── */
+    .risk-meter {
+        background: #111827;
+        border: 1px solid #1F2937;
+        border-radius: 8px;
+        padding: 14px 18px;
+    }
+    .risk-label {
+        font-family: 'Inter', sans-serif;
+        font-size: 0.68rem;
+        font-weight: 600;
+        color: #6B7A8D;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .risk-bar-bg {
+        width: 100%;
+        height: 6px;
+        background: #1F2937;
+        border-radius: 3px;
+        margin: 8px 0 6px 0;
+        overflow: hidden;
+    }
+    .risk-bar-fill {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 0.4s ease;
+    }
+    .risk-status {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.68rem;
+    }
+
+    /* ── Empty State ── */
+    .empty-state {
+        text-align: center;
+        padding: 32px 16px;
+        color: #4B5563;
+        font-family: 'Inter', sans-serif;
+        font-size: 0.82rem;
+    }
+
+    /* ── Log Box ── */
+    .log-box {
+        background: #0D1117;
+        border: 1px solid #1C2333;
+        border-radius: 6px;
+        padding: 12px 14px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.68rem;
+        color: #9CA3AF;
+        line-height: 1.7;
+        max-height: 260px;
+        overflow-y: auto;
+    }
+
+    /* ── Buttons ── */
     .stButton > button {
-        border-radius: 4px !important;
+        border-radius: 6px !important;
+        font-family: 'Inter', sans-serif !important;
         font-weight: 600 !important;
-        letter-spacing: 0.04em !important;
-        font-size: 0.78rem !important;
+        font-size: 0.72rem !important;
+        letter-spacing: 0.03em !important;
         text-transform: uppercase !important;
+        transition: all 0.15s ease !important;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+        div[data-testid="stMetricValue"] { font-size: 1.0rem !important; }
+        div[data-testid="stMetricLabel"] { font-size: 0.60rem !important; }
+        .asset-name { font-size: 0.82rem; }
+        .badge { font-size: 0.58rem; padding: 3px 7px; }
     }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ==============================================================================
-# DATA INGESTION (RESILIENT AUTO-DISCOVERY)
-# ==============================================================================
+# ── Helper: Build Badge HTML ─────────────────────────────────────────────────
+def badge(text: str, variant: str = "slate") -> str:
+    return f'<span class="badge b-{variant}"><span class="badge-dot"></span>{text}</span>'
+
+
+# ── Data Layer ───────────────────────────────────────────────────────────────
 def query_api(endpoint: str):
     global API_BASE
-    # Priority: configured API_BASE, then localhost fallback for local dev
-    candidates = [API_BASE, "http://127.0.0.1:8000/api/v1"]
+    candidates = [c for c in [API_BASE, _API_BASE_DEFAULT, "http://127.0.0.1:8000/api/v1"] if c]
     seen = set()
     for base in candidates:
         if not base or base in seen:
@@ -161,17 +271,23 @@ def query_api(endpoint: str):
             continue
     return None
 
-# Credentials for Dashboard API control authentication
+
 DASHBOARD_AUTH_TOKEN = None
 
 def get_auth_headers(base_url: str) -> dict:
-    """Retrieves or refreshes JWT authentication token for control operations."""
     global DASHBOARD_AUTH_TOKEN
     if DASHBOARD_AUTH_TOKEN:
         return {"Authorization": f"Bearer {DASHBOARD_AUTH_TOKEN}"}
 
-    admin_user = os.getenv("ADMIN_USER", "admin")
-    admin_pass = os.getenv("ADMIN_PASSWORD", "AdminPass@2026")
+    try:
+        admin_user = st.secrets.get("ADMIN_USER", os.getenv("ADMIN_USER", "admin"))
+    except Exception:
+        admin_user = os.getenv("ADMIN_USER", "admin")
+    try:
+        admin_pass = st.secrets.get("ADMIN_PASSWORD", os.getenv("ADMIN_PASSWORD", "AdminPass@2026"))
+    except Exception:
+        admin_pass = os.getenv("ADMIN_PASSWORD", "AdminPass@2026")
+
     try:
         login_res = requests.post(
             f"{base_url}/login",
@@ -179,8 +295,7 @@ def get_auth_headers(base_url: str) -> dict:
             timeout=3.0,
         )
         if login_res.status_code == 200:
-            token_data = login_res.json()
-            DASHBOARD_AUTH_TOKEN = token_data.get("access_token")
+            DASHBOARD_AUTH_TOKEN = login_res.json().get("access_token")
             return {"Authorization": f"Bearer {DASHBOARD_AUTH_TOKEN}"}
     except Exception:
         pass
@@ -189,8 +304,7 @@ def get_auth_headers(base_url: str) -> dict:
 
 def send_command(endpoint: str, payload: dict = None):
     global API_BASE, DASHBOARD_AUTH_TOKEN
-    # Priority: configured API_BASE, then localhost fallback for local dev
-    candidates = [API_BASE, "http://127.0.0.1:8000/api/v1"]
+    candidates = [c for c in [API_BASE, _API_BASE_DEFAULT, "http://127.0.0.1:8000/api/v1"] if c]
     seen = set()
     for base in candidates:
         if not base or base in seen:
@@ -203,299 +317,260 @@ def send_command(endpoint: str, payload: dict = None):
                 API_BASE = base
                 return True, res.json()
             elif res.status_code == 401:
-                # Token expired or reset — refresh and retry once
                 DASHBOARD_AUTH_TOKEN = None
                 new_headers = get_auth_headers(base)
-                retry_res = requests.post(f"{base}/{endpoint}", json=payload, headers=new_headers, timeout=3.0)
-                if retry_res.status_code == 200:
+                retry = requests.post(f"{base}/{endpoint}", json=payload, headers=new_headers, timeout=3.0)
+                if retry.status_code == 200:
                     API_BASE = base
-                    return True, retry_res.json()
+                    return True, retry.json()
         except Exception:
             continue
-    return False, "Failed to connect to gateway endpoints"
+    return False, "Connection failed"
 
 
-# ==============================================================================
-# SIDEBAR: SYSTEM CONTROLS & PARAMS
-# ==============================================================================
+# ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### PIPLOCI")
-    st.caption("QUANTITATIVE EXECUTION & RISK MANAGEMENT")
-    
-    with st.expander("GATEWAY ENDPOINT", expanded=False):
-        gateway_input = st.text_input("Backend API Base URL", value=API_BASE, key="custom_gateway_url")
-        if gateway_input and gateway_input.strip() != API_BASE:
-            API_BASE = gateway_input.strip().rstrip("/")
+    st.markdown("#### ◆ Piploci")
+    st.caption("Quantitative Execution Engine")
+    st.divider()
+
+    with st.expander("Gateway", expanded=False):
+        gw = st.text_input("API Endpoint", value=API_BASE or "", key="gw_input", label_visibility="collapsed")
+        if gw and gw.strip().rstrip("/") != (API_BASE or ""):
+            API_BASE = gw.strip().rstrip("/")
             st.rerun()
 
     st.divider()
+    st.markdown("##### Controls")
 
-    st.markdown("#### SYSTEM OVERRIDES")
-    
     status_data = query_api("status") or {}
     is_halted = status_data.get("circuit_breaker_active", False) or status_data.get("status") in ["HALTED", "CIRCUIT_BREAKER_HALTED"]
 
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        if st.button("KILL SWITCH", type="primary", use_container_width=True, disabled=is_halted):
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Kill Switch", type="primary", use_container_width=True, disabled=is_halted):
             ok, msg = send_command("control/emergency-stop")
             if ok:
-                st.error("KILL SWITCH ACTIVATED: Closed all open bot positions.")
+                st.toast("Kill switch activated — all bot positions closed.", icon="🔴")
                 time.sleep(0.4)
                 st.rerun()
-            else:
-                st.error(f"Execution failed: {msg}")
-
-    with col_btn2:
-        if st.button("RESUME", use_container_width=True, disabled=not is_halted):
+    with c2:
+        if st.button("Resume", use_container_width=True, disabled=not is_halted):
             ok, msg = send_command("control/resume")
             if ok:
-                st.success("System resumed.")
+                st.toast("Trading resumed.", icon="🟢")
                 time.sleep(0.4)
                 st.rerun()
-            else:
-                st.error(f"Execution failed: {msg}")
 
     st.divider()
-    st.markdown("#### EXECUTION PARAMETERS")
-    st.markdown("""
-    - **Max Daily Drawdown:** `$4.50 USD`
-    - **Cooldown Period:** `24 Hours`
-    - **Risk Allocation:** `1.0% / Trade`
-    - **Gold Magic ID:** `100201`
-    - **USDJPY Magic ID:** `100202`
-    - **Protected IDs:** `Discretionary (0)`
-    """)
+
+    with st.expander("Risk Parameters", expanded=False):
+        st.markdown("""
+| Parameter | Value |
+|---|---|
+| Daily Drawdown Limit | $4.50 |
+| Cooldown Period | 24h |
+| Risk Per Trade | 1.0% |
+| Gold Magic ID | 100201 |
+| USDJPY Magic ID | 100202 |
+""")
+
     st.divider()
-    auto_refresh = st.checkbox("Live Refresh (2.0s)", value=True)
+    auto_refresh = st.toggle("Live Refresh", value=True)
 
 
-# ==============================================================================
-# MAIN DASHBOARD CONTROLLER (FRAGMENT REFRESH)
-# ==============================================================================
+# ── Main Dashboard ───────────────────────────────────────────────────────────
 @st.fragment(run_every="2.0s" if auto_refresh else None)
-def display_portfolio():
+def render_dashboard():
     status = query_api("status")
-    is_live_conn = status is not None
+    online = status is not None
 
     if not status:
         status = {
-            "status": "OFFLINE",
-            "terminal_connected": False,
-            "balance": 0.0,
-            "equity": 0.0,
-            "floating_pnl": 0.0,
-            "starting_daily_balance": 0.0,
-            "current_drawdown": 0.0,
-            "daily_drawdown_limit": 4.50,
-            "circuit_breaker_active": False,
-            "allowed_magic_numbers": [100201, 100202],
+            "status": "OFFLINE", "terminal_connected": False,
+            "balance": 0.0, "equity": 0.0, "floating_pnl": 0.0,
+            "starting_daily_balance": 0.0, "current_drawdown": 0.0,
+            "daily_drawdown_limit": 4.50, "circuit_breaker_active": False,
         }
 
-    # Top Telemetry Bar
-    c_title, c_badges = st.columns([3, 2])
-    with c_title:
-        st.markdown("### INSTITUTIONAL MULTI-ASSET TRADING DESK")
-    with c_badges:
-        if status.get("terminal_connected"):
-            badge_term = '<span class="status-pill pill-active">MT5 TERMINAL: CONNECTED</span>'
+    # ── Header Row ───────────────────────────────────────────────────────
+    hdr_left, hdr_right = st.columns([3, 2])
+    with hdr_left:
+        st.markdown("## Trading Desk")
+    with hdr_right:
+        # Status badges — right-aligned
+        term_b = badge("Terminal Connected", "green") if status.get("terminal_connected") else badge("Terminal Offline", "red")
+
+        state_val = status.get("status", "OFFLINE")
+        if state_val in ["HALTED", "CIRCUIT_BREAKER_HALTED"]:
+            state_b = badge("Halted", "red")
+        elif state_val == "RUNNING":
+            state_b = badge("Active", "green")
         else:
-            badge_term = '<span class="status-pill pill-critical">MT5 TERMINAL: DISCONNECTED</span>'
+            state_b = badge("Offline", "slate")
 
-        if status.get("circuit_breaker_active") or status.get("status") in ["HALTED", "CIRCUIT_BREAKER_HALTED"]:
-            badge_state = '<span class="status-pill pill-critical">CIRCUIT BREAKER: HALTED</span>'
-        elif status.get("status") == "RUNNING":
-            badge_state = '<span class="status-pill pill-active">STATE: ACTIVE SCANNING</span>'
-        else:
-            badge_state = '<span class="status-pill pill-muted">STATE: STANDBY</span>'
+        st.markdown(
+            f"<div style='text-align:right;padding-top:12px;display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;'>{term_b} {state_b}</div>",
+            unsafe_allow_html=True,
+        )
 
-        badge_sec = '<span class="status-pill pill-muted">MAGIC ISOLATION: ENFORCED</span>'
-        st.markdown(f"<div style='text-align: right; padding-top: 4px;'>{badge_term} &nbsp; {badge_state} &nbsp; {badge_sec}</div>", unsafe_allow_html=True)
-
-    st.markdown("<hr style='margin-top: 8px; margin-bottom: 20px; border-color: #1E293B;'>", unsafe_allow_html=True)
-
-    # 1. Financial KPIs
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    # ── KPI Row ──────────────────────────────────────────────────────────
     balance = status.get("balance", 0.0)
     equity = status.get("equity", 0.0)
-    floating_pnl = status.get("floating_pnl", 0.0)
-    drawdown = status.get("current_drawdown", 0.0)
-    drawdown_limit = status.get("daily_drawdown_limit", 4.50)
+    pnl = status.get("floating_pnl", 0.0)
+    dd = status.get("current_drawdown", 0.0)
+    dd_limit = status.get("daily_drawdown_limit", 4.50)
 
-    with kpi1:
-        st.metric("NET ASSET VALUE (EQUITY)", f"${equity:,.2f}" if is_live_conn else "--")
-    with kpi2:
-        st.metric("STARTING DAILY BALANCE", f"${status.get('starting_daily_balance', balance):,.2f}" if is_live_conn else "--")
-    with kpi3:
-        pnl_str = f"${floating_pnl:+,.2f}" if is_live_conn else "--"
-        st.metric("UNREALIZED FLOATING P&L", pnl_str, delta=f"{floating_pnl:+.2f}" if is_live_conn else None)
-    with kpi4:
-        dd_str = f"${drawdown:.2f} / ${drawdown_limit:.2f}" if is_live_conn else "--"
-        st.metric("DAILY DRAWDOWN EXPOSURE", dd_str, delta=f"-${drawdown:.2f}" if drawdown > 0 else "0.00", delta_color="inverse")
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.metric("Equity", f"${equity:,.2f}" if online else "—")
+    with k2:
+        st.metric("Balance", f"${balance:,.2f}" if online else "—")
+    with k3:
+        st.metric("Floating P&L", f"${pnl:+,.2f}" if online else "—",
+                   delta=f"{pnl:+.2f}" if online and pnl != 0 else None)
+    with k4:
+        st.metric("Drawdown", f"${dd:.2f} / ${dd_limit:.2f}" if online else "—",
+                   delta=f"-{dd:.2f}" if dd > 0 else None, delta_color="inverse")
 
-    # 2. Risk Circuit Breaker Meter
-    st.markdown("<br>", unsafe_allow_html=True)
-    ratio = min(max(drawdown / drawdown_limit, 0.0), 1.0) if drawdown_limit > 0 else 0.0
-    
-    st.markdown(f"**DAILY FLOATING DRAWDOWN RISK BUDGET** &nbsp; `[THRESHOLD: ${drawdown_limit:.2f} USD]`")
-    st.progress(ratio)
-    
+    # ── Risk Gauge ───────────────────────────────────────────────────────
+    ratio = min(max(dd / dd_limit, 0.0), 1.0) if dd_limit > 0 else 0.0
+    pct = ratio * 100
+
     if ratio >= 0.8:
-        st.markdown(f"<span style='color: #EF4444; font-size: 0.80rem; font-weight: 600;'>[ALERT] HIGH RISK EXPOSURE: ${drawdown:.2f} OF ${drawdown_limit:.2f} BUDGET EXPENDED ({(ratio * 100):.1f}%)</span>", unsafe_allow_html=True)
+        bar_color = "#EF4444"
+        risk_text = f'<span class="risk-status" style="color:#F87171;">Critical — ${dd:.2f} of ${dd_limit:.2f} used ({pct:.0f}%)</span>'
     elif ratio >= 0.5:
-        st.markdown(f"<span style='color: #F59E0B; font-size: 0.80rem; font-weight: 600;'>[NOTICE] MODERATE DRAWDOWN: ${drawdown:.2f} OF ${drawdown_limit:.2f} BUDGET EXPENDED ({(ratio * 100):.1f}%)</span>", unsafe_allow_html=True)
+        bar_color = "#F59E0B"
+        risk_text = f'<span class="risk-status" style="color:#FBBF24;">Elevated — ${dd:.2f} of ${dd_limit:.2f} used ({pct:.0f}%)</span>'
     else:
-        st.markdown(f"<span style='color: #10B981; font-size: 0.80rem; font-weight: 600;'>[NORMAL] WITHIN RISK LIMITS: ${drawdown:.2f} EXPENDED ({(ratio * 100):.1f}%)</span>", unsafe_allow_html=True)
+        bar_color = "#10B981"
+        risk_text = f'<span class="risk-status" style="color:#34D399;">Normal — ${dd:.2f} of ${dd_limit:.2f} used ({pct:.0f}%)</span>'
 
-    st.markdown("<hr style='margin-top: 24px; margin-bottom: 24px; border-color: #1E293B;'>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="risk-meter">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span class="risk-label">Daily Risk Budget</span>
+            {risk_text}
+        </div>
+        <div class="risk-bar-bg">
+            <div class="risk-bar-fill" style="width:{pct:.1f}%;background:{bar_color};"></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # 3. Asset Execution & Strategy Alignment Panels
-    st.markdown("#### ASSET SCANNING & MULTI-TIMEFRAME CONSENSUS")
-    
+    st.markdown("")
+
+    # ── Asset Cards ──────────────────────────────────────────────────────
+    st.markdown('<div class="section-label">Market Instruments</div>', unsafe_allow_html=True)
+
     configs = query_api("configs") or []
-    cfg_map = {c["symbol"]: c["active"] for c in configs}
+    cfg_map = {c["symbol"]: c.get("active", True) for c in configs}
     signals = query_api("signals") or {}
 
-    col_gold, col_jpy = st.columns(2)
+    def render_asset_card(symbol: str, label: str, sessions: str, magic: int, btn_key: str):
+        """Renders a clean, compact asset monitoring card."""
+        sig_info = signals.get(symbol, {})
+        sig = sig_info.get("signal", {})
+        direction = sig.get("direction", "NEUTRAL")
+        in_session = sig_info.get("session_active", False)
+        news_blk = sig_info.get("news_blackout", False)
+        reason = sig.get("reason", "Awaiting signal alignment…")
+        is_active = cfg_map.get(symbol, True)
 
-    with col_gold:
-        with st.container():
-            cg_h1, cg_h2 = st.columns([3, 1])
-            with cg_h1:
-                st.markdown("**XAUUSD // SPOT GOLD**")
-                st.caption("MAGIC ID: `100201` | SESSION: `15:30 - 19:30 EAT`")
-            with cg_h2:
-                gold_active = cfg_map.get("XAUUSD", True)
-                if st.button("DISABLE" if gold_active else "ENABLE", key="btn_xau", use_container_width=True):
-                    send_command("control/toggle", {"symbol": "XAUUSD", "active": not gold_active})
-                    st.rerun()
+        # Badges
+        sess_b = badge("In Session", "green") if in_session else badge("Closed", "slate")
+        news_b = badge("Blackout", "red") if news_blk else badge("Clear", "green")
 
-            sig_info = signals.get("XAUUSD", {})
-            sig = sig_info.get("signal", {})
-            dir_str = sig.get("direction", "NEUTRAL")
-            sess_str = sig_info.get("session_message", "STANDBY")
-            in_sess = sig_info.get("session_active", False)
-            news_blk = sig_info.get("news_blackout", False)
-            news_msg = sig_info.get("news_message", "NEWS SHIELD: NORMAL (NO HIGH-IMPACT EVENTS)")
+        if direction == "BUY":
+            sig_b = badge("Buy Aligned", "green")
+        elif direction == "SELL":
+            sig_b = badge("Sell Aligned", "red")
+        else:
+            sig_b = badge("Standby", "amber")
 
-            sess_badge = '<span class="status-pill pill-active">SESSION: ACTIVE</span>' if in_sess else '<span class="status-pill pill-muted">SESSION: CLOSED</span>'
-            news_badge = '<span class="status-pill pill-critical">NEWS: BLACKOUT ACTIVE</span>' if news_blk else '<span class="status-pill pill-active">NEWS: CLEAR</span>'
+        st.markdown(f"""
+        <div class="asset-card">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                <div>
+                    <div class="asset-name">{label}</div>
+                    <div class="asset-sub">Magic {magic} · {sessions}</div>
+                </div>
+            </div>
+            <div class="asset-row">{sess_b} {news_b} {sig_b}</div>
+            <div class="asset-field" style="margin-top:10px;">{reason}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-            st.markdown(f"STATUS: &nbsp; {sess_badge} &nbsp; {news_badge}", unsafe_allow_html=True)
-            st.markdown(f"WINDOW: `{sess_str}`")
-            st.markdown(f"CALENDAR: `{news_msg or 'Normal'}`")
-            st.markdown(f"CONSENSUS (M15+H1): `{sig.get('reason', 'Evaluating technical indicators...')}`")
-            
-            if dir_str == "BUY":
-                st.markdown('<span class="status-pill pill-active">RECOMMENDATION: STRONG BUY ALIGNED</span>', unsafe_allow_html=True)
-            elif dir_str == "SELL":
-                st.markdown('<span class="status-pill pill-critical">RECOMMENDATION: STRONG SELL ALIGNED</span>', unsafe_allow_html=True)
-            else:
-                st.markdown('<span class="status-pill pill-warning">RECOMMENDATION: STANDBY (NO ALIGNMENT)</span>', unsafe_allow_html=True)
+        if st.button("Disable" if is_active else "Enable", key=btn_key, use_container_width=True):
+            send_command("control/toggle", {"symbol": symbol, "active": not is_active})
+            st.rerun()
 
-    with col_jpy:
-        with st.container():
-            cj_h1, cj_h2 = st.columns([3, 1])
-            with cj_h1:
-                st.markdown("**USDJPY // US DOLLAR / JAPANESE YEN**")
-                st.caption("MAGIC ID: `100202` | SESSIONS: `03:00-07:00 / 15:30-19:30 EAT`")
-            with cj_h2:
-                jpy_active = cfg_map.get("USDJPY", True)
-                if st.button("DISABLE" if jpy_active else "ENABLE", key="btn_jpy", use_container_width=True):
-                    send_command("control/toggle", {"symbol": "USDJPY", "active": not jpy_active})
-                    st.rerun()
+    col_a, col_b = st.columns(2)
+    with col_a:
+        render_asset_card("XAUUSD", "XAUUSD — Gold", "15:30–19:30 EAT", 100201, "btn_xau")
+    with col_b:
+        render_asset_card("USDJPY", "USDJPY — Dollar/Yen", "03:00–07:00 / 15:30–19:30 EAT", 100202, "btn_jpy")
 
-            sig_info_j = signals.get("USDJPY", {})
-            sig_j = sig_info_j.get("signal", {})
-            dir_str_j = sig_j.get("direction", "NEUTRAL")
-            sess_str_j = sig_info_j.get("session_message", "STANDBY")
-            in_sess_j = sig_info_j.get("session_active", False)
-            news_blk_j = sig_info_j.get("news_blackout", False)
-            news_msg_j = sig_info_j.get("news_message", "NEWS SHIELD: NORMAL (NO HIGH-IMPACT EVENTS)")
+    st.markdown("")
 
-            sess_badge_j = '<span class="status-pill pill-active">SESSION: ACTIVE</span>' if in_sess_j else '<span class="status-pill pill-muted">SESSION: CLOSED</span>'
-            news_badge_j = '<span class="status-pill pill-critical">NEWS: BLACKOUT ACTIVE</span>' if news_blk_j else '<span class="status-pill pill-active">NEWS: CLEAR</span>'
+    # ── Positions ────────────────────────────────────────────────────────
+    st.markdown('<div class="section-label">Open Positions</div>', unsafe_allow_html=True)
 
-            st.markdown(f"STATUS: &nbsp; {sess_badge_j} &nbsp; {news_badge_j}", unsafe_allow_html=True)
-            st.markdown(f"WINDOW: `{sess_str_j}`")
-            st.markdown(f"CALENDAR: `{news_msg_j or 'Normal'}`")
-            st.markdown(f"CONSENSUS (M15+H1): `{sig_j.get('reason', 'Evaluating technical indicators...')}`")
-
-            if dir_str_j == "BUY":
-                st.markdown('<span class="status-pill pill-active">RECOMMENDATION: BUY ALIGNED</span>', unsafe_allow_html=True)
-            elif dir_str_j == "SELL":
-                st.markdown('<span class="status-pill pill-critical">RECOMMENDATION: SELL ALIGNED</span>', unsafe_allow_html=True)
-            else:
-                st.markdown('<span class="status-pill pill-warning">RECOMMENDATION: STANDBY (NO ALIGNMENT)</span>', unsafe_allow_html=True)
-
-    st.markdown("<hr style='margin-top: 24px; margin-bottom: 24px; border-color: #1E293B;'>", unsafe_allow_html=True)
-
-    # 4. Open Position Book (Magic Isolated)
-    st.markdown("#### ACTIVE ORDERS (ISOLATED TO MAGIC 100201 & 100202)")
     positions = query_api("positions") or []
-    
     if positions:
-        df_pos = pd.DataFrame(positions)
-        cols_map = {
-            "ticket": "TICKET",
-            "symbol": "SYMBOL",
-            "type": "SIDE",
-            "volume": "VOLUME",
-            "price_open": "OPEN PRICE",
-            "sl": "SL",
-            "tp": "TP",
-            "profit": "UNREALIZED P&L ($)",
-            "magic": "MAGIC ID",
+        df = pd.DataFrame(positions)
+        col_map = {
+            "ticket": "Ticket", "symbol": "Symbol", "type": "Side",
+            "volume": "Lots", "price_open": "Entry",
+            "sl": "SL", "tp": "TP", "profit": "P&L ($)", "magic": "Magic",
         }
-        show_cols = [c for c in cols_map.keys() if c in df_pos.columns]
-        df_display = df_pos[show_cols].rename(columns=cols_map)
-        
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        show = [c for c in col_map if c in df.columns]
+        st.dataframe(df[show].rename(columns=col_map), use_container_width=True, hide_index=True)
 
-        col_pos_sel, col_pos_act = st.columns([3, 1])
-        with col_pos_sel:
-            sel_ticket = st.selectbox("SELECT POSITION TICKET TO CLOSE:", [p["ticket"] for p in positions], key="pos_sel_box")
-        with col_pos_act:
-            st.write("")
-            st.write("")
-            if st.button("CLOSE SELECTED POSITION", use_container_width=True):
-                ok, res = send_command("control/close-position", {"ticket": sel_ticket})
+        cp1, cp2 = st.columns([3, 1])
+        with cp1:
+            sel = st.selectbox("Select position to close", [p["ticket"] for p in positions], key="close_sel", label_visibility="collapsed")
+        with cp2:
+            if st.button("Close Position", use_container_width=True):
+                ok, res = send_command("control/close-position", {"ticket": sel})
                 if ok:
-                    st.success(f"Position #{sel_ticket} closed.")
+                    st.toast(f"Position #{sel} closed.", icon="✓")
                     st.rerun()
                 else:
-                    st.error(f"Close failed: {res}")
+                    st.error(f"Failed: {res}")
     else:
-        st.markdown("<div class='audit-terminal'>NO ACTIVE BOT POSITIONS RECORDED. ENGINE IS MONITORING CRITERIA FOR ENTRY.</div>", unsafe_allow_html=True)
+        st.markdown('<div class="empty-state">No open bot positions. Engine is monitoring entry criteria.</div>', unsafe_allow_html=True)
 
-    st.markdown("<hr style='margin-top: 24px; margin-bottom: 24px; border-color: #1E293B;'>", unsafe_allow_html=True)
+    st.markdown("")
 
-    # 5. Audit Trail & Deal History
-    tab_audit, tab_history = st.tabs(["SYSTEM AUDIT LOGS", "CLOSED DEAL HISTORY"])
+    # ── Logs & History ───────────────────────────────────────────────────
+    tab_logs, tab_history = st.tabs(["Audit Log", "Trade History"])
 
-    with tab_audit:
+    with tab_logs:
         events = query_api("events") or []
         if events:
             lines = []
-            for ev in events[:50]:
+            for ev in events[:40]:
                 ts = ev.get("timestamp", "")[11:19]
                 lvl = ev.get("log_level", "INFO")
                 mod = ev.get("module", "System")
                 msg = ev.get("message", "")
-                lines.append(f"[{ts}] [{lvl:7s}] [{mod:12s}] {msg}")
-            st.text_area("Audit Log Output", value="\n".join(lines), height=220, disabled=True, label_visibility="collapsed")
+                lines.append(f"[{ts}] {lvl:7s}  {mod:12s}  {msg}")
+            log_text = "\n".join(lines)
+            st.markdown(f'<div class="log-box"><pre>{log_text}</pre></div>', unsafe_allow_html=True)
         else:
-            st.markdown("<div class='audit-terminal'>NO AUDIT LOGS DETECTED.</div>", unsafe_allow_html=True)
+            st.markdown('<div class="empty-state">No audit events recorded.</div>', unsafe_allow_html=True)
 
     with tab_history:
         trades = query_api("trades") or []
         if trades:
-            df_trades = pd.DataFrame(trades)
-            col_order = ["ticket", "symbol", "action", "volume", "open_price", "close_price", "sl", "tp", "pnl", "timestamp", "status", "notes"]
-            valid_cols = [c for c in col_order if c in df_trades.columns]
-            st.dataframe(df_trades[valid_cols], use_container_width=True, hide_index=True)
+            df_t = pd.DataFrame(trades)
+            col_order = ["ticket", "symbol", "action", "volume", "open_price", "close_price", "pnl", "status", "timestamp"]
+            valid = [c for c in col_order if c in df_t.columns]
+            st.dataframe(df_t[valid], use_container_width=True, hide_index=True)
         else:
-            st.markdown("<div class='audit-terminal'>NO EXECUTED DEALS IN LOG.</div>", unsafe_allow_html=True)
+            st.markdown('<div class="empty-state">No trade history recorded.</div>', unsafe_allow_html=True)
 
 
-display_portfolio()
+render_dashboard()
