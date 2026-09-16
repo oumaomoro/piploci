@@ -9,11 +9,11 @@ import streamlit as st
 from typing import Dict, Any, Optional
 
 _LOCAL_DEFAULT = "http://127.0.0.1:8000/api/v1"
-_CLOUDFLARE_DEFAULT = "https://badge-voltage-mia-father.trycloudflare.com/api/v1"
+_CLOUDFLARE_DEFAULT = "https://rendering-adaptation-tract-gps.trycloudflare.com/api/v1"
 
 
 def get_api_base() -> str:
-    """Resolves API base from Streamlit session state, secrets, environment, or localhost default."""
+    """Resolves API base from Streamlit session state, secrets, environment, or Cloudflare tunnel."""
     if "api_base_override" in st.session_state and st.session_state["api_base_override"]:
         return st.session_state["api_base_override"].rstrip("/")
 
@@ -27,8 +27,13 @@ def get_api_base() -> str:
     if env_base:
         return env_base.rstrip("/")
 
-    # Default to local server if running
-    return _LOCAL_DEFAULT
+    # On Streamlit Cloud (no localhost), fall back to Cloudflare tunnel
+    import socket
+    try:
+        socket.create_connection(("127.0.0.1", 8000), timeout=0.3).close()
+        return _LOCAL_DEFAULT
+    except OSError:
+        return _CLOUDFLARE_DEFAULT
 
 
 def get_token() -> Optional[str]:
