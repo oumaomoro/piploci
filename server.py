@@ -351,6 +351,13 @@ verify_token = get_current_user
 # ==============================================================================
 # API ENDPOINTS
 # ==============================================================================
+@app.get("/health")
+@app.get("/api/v1/health")
+async def health_check():
+    """Lightweight server health probe."""
+    return {"status": "ok", "service": APP_NAME, "time": datetime.now(timezone.utc).isoformat()}
+
+
 @app.post("/api/v1/auth/login", response_model=TokenResponse)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     """OAuth2 compatible token login."""
