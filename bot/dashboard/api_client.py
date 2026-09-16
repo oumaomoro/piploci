@@ -9,7 +9,7 @@ import streamlit as st
 from typing import Dict, Any, Optional
 
 _LOCAL_DEFAULT = "http://127.0.0.1:8000/api/v1"
-_CLOUDFLARE_DEFAULT = "https://likelihood-laptop-quebec-voip.trycloudflare.com/api/v1"
+_CLOUDFLARE_DEFAULT = "https://paintball-chuck-activation-fragrance.trycloudflare.com/api/v1"
 
 
 def get_api_base() -> str:
