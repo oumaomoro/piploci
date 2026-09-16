@@ -22,6 +22,7 @@ try:
     from bot.api.routes.control import router as control_router
     from bot.api.routes.data import router as data_router
     from bot.api.routes.config import router as config_router
+    from bot.api.routes.auth import router as auth_router
 except ImportError:
     from config import APP_NAME
     from database import init_database, SessionLocal, TradeLogModel, log_system_event
@@ -32,6 +33,7 @@ except ImportError:
     from bot.api.routes.control import router as control_router
     from bot.api.routes.data import router as data_router
     from bot.api.routes.config import router as config_router
+    from bot.api.routes.auth import router as auth_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("FastAPIServer")
@@ -135,10 +137,17 @@ def create_app() -> FastAPI:
     )
 
     # Register modular routers
+    fastapi_app.include_router(auth_router)
     fastapi_app.include_router(status_router)
     fastapi_app.include_router(control_router)
     fastapi_app.include_router(data_router)
     fastapi_app.include_router(config_router)
+
+    @fastapi_app.get("/health")
+    @fastapi_app.get("/api/v1/health")
+    async def health_check():
+        """Lightweight server health probe."""
+        return {"status": "ok", "service": APP_NAME, "time": datetime.now(timezone.utc).isoformat()}
 
     # Real-time WebSocket endpoint
     @fastapi_app.websocket("/api/v1/ws/live-feed")

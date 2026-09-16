@@ -13,27 +13,33 @@ _CLOUDFLARE_DEFAULT = "https://likelihood-laptop-quebec-voip.trycloudflare.com/a
 
 
 def get_api_base() -> str:
-    """Resolves API base from Streamlit session state, secrets, environment, or Cloudflare tunnel."""
+    """Resolves API base: prefers localhost when running locally, falls back to secrets/tunnel on cloud."""
     if "api_base_override" in st.session_state and st.session_state["api_base_override"]:
         return st.session_state["api_base_override"].rstrip("/")
 
+    # 1. First priority for local development: check if port 8000 is open locally
+    import socket
+    for host in ("127.0.0.1", "localhost"):
+        try:
+            socket.create_connection((host, 8000), timeout=0.15).close()
+            return f"http://{host}:8000/api/v1"
+        except OSError:
+            pass
+
+    # 2. On Streamlit Cloud: check secrets
     try:
         if hasattr(st, "secrets") and "API_BASE" in st.secrets:
             return st.secrets["API_BASE"].rstrip("/")
     except Exception:
         pass
 
+    # 3. Check environment variable
     env_base = os.getenv("API_BASE")
     if env_base:
         return env_base.rstrip("/")
 
-    # On Streamlit Cloud (no localhost), fall back to Cloudflare tunnel
-    import socket
-    try:
-        socket.create_connection(("127.0.0.1", 8000), timeout=0.3).close()
-        return _LOCAL_DEFAULT
-    except OSError:
-        return _CLOUDFLARE_DEFAULT
+    # 4. Fallback to active Cloudflare tunnel
+    return _CLOUDFLARE_DEFAULT
 
 
 def get_token() -> Optional[str]:

@@ -6,9 +6,11 @@ Imports and delegates execution to the modular dashboard orchestrator in bot/das
 import os
 import sys
 
-# Ensure root is in sys.path
+# Ensure root directory is in sys.path
 root_dir = os.path.dirname(os.path.abspath(__file__))
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
-import bot.dashboard.app  # noqa: F401
+from bot.dashboard.app import run_dashboard
+
+run_dashboard()
