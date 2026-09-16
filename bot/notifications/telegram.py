@@ -116,7 +116,7 @@ async def send_daily_digest(chat_id: Optional[str] = None) -> None:
     Queries today's closed trades from the DB and sends a full end-of-day
     P&L digest to Telegram. Fires automatically at 20:00 EAT via schedule_daily_digest.
     """
-    from datetime import date, timedelta
+    from datetime import date, timedelta, datetime, timezone
 
     try:
         try:
@@ -183,7 +183,7 @@ async def schedule_daily_digest(chat_id: Optional[str] = None) -> None:
     Background coroutine: fires send_daily_digest every day at 20:00 EAT (17:00 UTC).
     Launch once at bot startup via asyncio.create_task(schedule_daily_digest()).
     """
-    from datetime import date, timedelta
+    from datetime import date, timedelta, datetime, timezone
 
     while True:
         now_utc = datetime.now(timezone.utc)
