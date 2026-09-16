@@ -18,7 +18,10 @@ except ImportError:
     TV_AVAILABLE = False
     Interval = None
 
-from config import SYMBOL_CONFIGS
+try:
+    from bot.config import SYMBOL_CONFIGS
+except ImportError:
+    from config import SYMBOL_CONFIGS
 
 logger = logging.getLogger("TradingViewTA")
 
@@ -151,9 +154,13 @@ class TradingViewAnalyzer:
 
     def get_aligned_signal(self, symbol: str) -> Dict[str, Any]:
         """
-        Evaluates multi-timeframe alignment across M15 and H1 timeframes.
-        Gold:   Requires STRONG_BUY / STRONG_SELL on M15 + BUY / SELL on H1.
-        USDJPY: Requires BUY or STRONG_BUY on both M15 and H1.
+        Evaluates multi-timeframe alignment across M15 and H1 timeframes for all 8 pairs.
+
+        XAUUSD  — Strictest: STRONG_BUY/SELL on M15 + BUY/SELL on H1 (high volatility asset).
+        USDJPY  — Strict:    BUY/STRONG_BUY on BOTH M15 + H1.
+        FX Pairs — Confluence: M15 + H1 must agree direction (BUY family or SELL family),
+                               PLUS at least one of: RSI confirmation, MACD crossover.
+                               Prevents weak/random signals from entering.
         """
         m15_data = self.fetch_interval_analysis(symbol, "M15")
         h1_data  = self.fetch_interval_analysis(symbol, "H1")
@@ -161,29 +168,80 @@ class TradingViewAnalyzer:
         m15_rec = str(m15_data.get("recommendation", "NEUTRAL")).upper()
         h1_rec  = str(h1_data.get("recommendation",  "NEUTRAL")).upper()
 
+        # RSI and MACD for confluence confirmation on forex pairs
+        rsi        = m15_data.get("rsi") or 50.0
+        macd_val   = m15_data.get("macd", 0.0) or 0.0
+        macd_sig   = m15_data.get("macd_signal", 0.0) or 0.0
+        macd_cross_bull = macd_val > macd_sig   # MACD line crossed above signal
+        macd_cross_bear = macd_val < macd_sig   # MACD line crossed below signal
+        rsi_bull   = rsi < 60.0  # Not overbought — room to run
+        rsi_bear   = rsi > 40.0  # Not oversold — room to run
+
+        BUY_RECS  = {"BUY", "STRONG_BUY"}
+        SELL_RECS = {"SELL", "STRONG_SELL"}
+
         direction  = "NEUTRAL"
         is_aligned = False
         reason     = "No multi-timeframe consensus"
 
+        # ------------------------------------------------------------------ #
+        # XAUUSD — Strictest filter (high volatility, news sensitive)
+        # ------------------------------------------------------------------ #
         if symbol == "XAUUSD":
-            if m15_rec == "STRONG_BUY" and h1_rec in ["BUY", "STRONG_BUY"]:
+            if m15_rec == "STRONG_BUY" and h1_rec in BUY_RECS:
                 direction, is_aligned = "BUY", True
-                reason = f"Gold Bullish Alignment: M15 ({m15_rec}) + H1 ({h1_rec})"
-            elif m15_rec == "STRONG_SELL" and h1_rec in ["SELL", "STRONG_SELL"]:
+                reason = f"Gold Bullish: M15=STRONG_BUY + H1={h1_rec}"
+            elif m15_rec == "STRONG_SELL" and h1_rec in SELL_RECS:
                 direction, is_aligned = "SELL", True
-                reason = f"Gold Bearish Alignment: M15 ({m15_rec}) + H1 ({h1_rec})"
+                reason = f"Gold Bearish: M15=STRONG_SELL + H1={h1_rec}"
             else:
-                reason = f"Gold Pending: M15={m15_rec}, H1={h1_rec} (Requires STRONG_BUY/SELL on M15)"
+                reason = f"Gold Pending: M15={m15_rec}, H1={h1_rec} (Needs STRONG_BUY/SELL on M15)"
 
+        # ------------------------------------------------------------------ #
+        # USDJPY — Strict alignment both timeframes required
+        # ------------------------------------------------------------------ #
         elif symbol == "USDJPY":
-            if m15_rec in ["BUY", "STRONG_BUY"] and h1_rec in ["BUY", "STRONG_BUY"]:
+            if m15_rec in BUY_RECS and h1_rec in BUY_RECS:
                 direction, is_aligned = "BUY", True
-                reason = f"USDJPY Bullish Alignment: M15 ({m15_rec}) + H1 ({h1_rec})"
-            elif m15_rec in ["SELL", "STRONG_SELL"] and h1_rec in ["SELL", "STRONG_SELL"]:
+                reason = f"USDJPY Bullish: M15={m15_rec} + H1={h1_rec}"
+            elif m15_rec in SELL_RECS and h1_rec in SELL_RECS:
                 direction, is_aligned = "SELL", True
-                reason = f"USDJPY Bearish Alignment: M15 ({m15_rec}) + H1 ({h1_rec})"
+                reason = f"USDJPY Bearish: M15={m15_rec} + H1={h1_rec}"
             else:
                 reason = f"USDJPY Divergence: M15={m15_rec}, H1={h1_rec}"
+
+        # ------------------------------------------------------------------ #
+        # All other FX pairs — Confluence: TF alignment + RSI or MACD confirm
+        # ------------------------------------------------------------------ #
+        elif symbol in {"EURUSD", "GBPUSD", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"}:
+            both_bullish = m15_rec in BUY_RECS  and h1_rec in BUY_RECS
+            both_bearish = m15_rec in SELL_RECS and h1_rec in SELL_RECS
+
+            if both_bullish:
+                # Require at least one extra confluence: RSI not overbought OR MACD bull cross
+                if rsi_bull or macd_cross_bull:
+                    direction, is_aligned = "BUY", True
+                    confluence = f"RSI={rsi:.1f}" if rsi_bull else f"MACD-CrossBull"
+                    reason = f"{symbol} Bullish: M15={m15_rec} + H1={h1_rec} | {confluence}"
+                else:
+                    reason = (
+                        f"{symbol} Bullish TF aligned but no confluence "
+                        f"(RSI={rsi:.1f} overbought, MACD bearish cross)"
+                    )
+
+            elif both_bearish:
+                # Require at least one extra confluence: RSI not oversold OR MACD bear cross
+                if rsi_bear or macd_cross_bear:
+                    direction, is_aligned = "SELL", True
+                    confluence = f"RSI={rsi:.1f}" if rsi_bear else f"MACD-CrossBear"
+                    reason = f"{symbol} Bearish: M15={m15_rec} + H1={h1_rec} | {confluence}"
+                else:
+                    reason = (
+                        f"{symbol} Bearish TF aligned but no confluence "
+                        f"(RSI={rsi:.1f} oversold, MACD bullish cross)"
+                    )
+            else:
+                reason = f"{symbol} Divergence: M15={m15_rec}, H1={h1_rec}"
 
         result = {
             "symbol":             symbol,
@@ -195,11 +253,15 @@ class TradingViewAnalyzer:
             "h1":                 h1_data,
             "m15_recommendation": m15_rec,
             "h1_recommendation":  h1_rec,
+            "rsi":                round(rsi, 2),
+            "macd_bull_cross":    macd_cross_bull,
+            "macd_bear_cross":    macd_cross_bear,
             "atr_14":             m15_data.get("atr", 1.0),
             "overall_status":     "ALIGNED" if is_aligned else "WAITING",
         }
         self.cached_signals[symbol] = result
         return result
+
 
     async def get_aligned_signal_async(self, symbol: str) -> Dict[str, Any]:
         """Asynchronously evaluates multi-timeframe alignment without blocking the async event loop."""
@@ -243,3 +305,4 @@ class TradingViewAnalyzer:
 
 tv_analyzer = TradingViewAnalyzer()
 get_aligned_signal = tv_analyzer.get_aligned_signal
+

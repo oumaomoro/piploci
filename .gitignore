@@ -22,6 +22,8 @@
 # Database & Storage
 *.db
 *.sqlite3
+*-shm
+*-wal
 
 # Python Bytecode & Cache
 __pycache__/

@@ -25,11 +25,16 @@ except ImportError:
 
 from config import (
     APP_NAME,
+    BASE_CAPITAL_USD,
     MAGIC_XAUUSD,
     MAGIC_USDJPY,
     ALLOWED_MAGIC_NUMBERS,
     DAILY_DRAWDOWN_LIMIT_USD,
     CIRCUIT_BREAKER_HALT_HOURS,
+    RISK_PERCENT_PER_TRADE,
+    TIER1_PROFIT_THRESHOLD,
+    TIER2_PROFIT_THRESHOLD,
+    DRAWDOWN_OVERRIDE_THRESHOLD_USD,
     TIMEZONE_EAT,
     SESSION_WINDOWS,
     SYMBOL_CONFIGS,
@@ -48,9 +53,11 @@ from database import (
     TradeLogModel,
     TradingLogModel,
     CircuitBreakerEventModel,
+    SignalAuditModel,
     log_system_event,
     log_trading_log,
     log_circuit_breaker_event,
+    log_signal_audit,
 )
 from news_filter import news_filter, news_shield
 from tradingview_ta_module import tv_analyzer, get_aligned_signal
@@ -73,6 +80,9 @@ class BotEngine:
         self._heartbeat_task: Optional[asyncio.Task] = None
         self.is_halted: bool = False
         self.halt_expiration: Optional[datetime] = None
+        self.base_capital: float = BASE_CAPITAL_USD
+        self.current_tier: int = 0
+        self.last_tier_transition: Optional[datetime] = None
 
     def register_broadcast_callback(self, cb: Callable[[Dict[str, Any]], None]):
         """Registers a callback function to receive live telemetry and log broadcasts."""
@@ -280,15 +290,177 @@ class BotEngine:
             return 3.50
         return 0.40
 
+    def evaluate_compounding_tier(
+        self,
+        symbol: Optional[str] = None,
+        balance: Optional[float] = None,
+        equity: Optional[float] = None,
+        floating_drawdown: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Calculates dynamic 'House-Money' compounding scaling tier and checks drawdown safety override:
+        - Tier 0 (Base Capital): When realized net profit < +15%, 1.0% risk, 1.0x lot multiplier.
+        - Tier 1 (Accelerated Growth): When realized net profit reaches +15% to +30%, 1.5% risk, 1.25x lot multiplier.
+        - Tier 2 (Aggressive Compounding): When realized net profit exceeds +30%, 2.0% risk, 1.5x lot multiplier.
+        - Drawdown Safety Override: If floating drawdown touches 50% of daily allowance ($2.25),
+          instantly drop back to Tier 0 (1.0% base risk, 1.0x multiplier) regardless of total monthly gains.
+        """
+        # Resolve balance and equity
+        if balance is None:
+            acct = self.mt5_client.account_info() if self.mt5_client else None
+            balance = getattr(acct, "balance", self.base_capital) if acct else self.base_capital
+
+        if equity is None:
+            acct = self.mt5_client.account_info() if self.mt5_client else None
+            equity = getattr(acct, "equity", balance) if acct else balance
+
+        # Resolve floating drawdown
+        if floating_drawdown is None:
+            if self.mt5_client:
+                acct = self.mt5_client.account_info()
+                drawdown_balance = max(0.0, self.starting_daily_balance - getattr(acct, "equity", balance)) if acct else 0.0
+                bot_positions = self.get_bot_positions()
+                bot_floating_pnl = sum(getattr(p, "profit", 0.0) for p in bot_positions)
+                drawdown_positions = max(0.0, -bot_floating_pnl)
+                floating_drawdown = max(drawdown_balance, drawdown_positions)
+            else:
+                floating_drawdown = 0.0
+
+        tier1_thresh = TIER1_PROFIT_THRESHOLD
+        tier2_thresh = TIER2_PROFIT_THRESHOLD
+        scaling_active = True
+
+        if symbol:
+            try:
+                with SessionLocal() as db:
+                    cfg_db = db.query(StrategyConfigModel).filter_by(symbol=symbol.upper()).first()
+                    if cfg_db:
+                        scaling_active = cfg_db.scaling_tier_active
+                        tier1_thresh = cfg_db.tier1_threshold if cfg_db.tier1_threshold is not None else TIER1_PROFIT_THRESHOLD
+                        tier2_thresh = cfg_db.tier2_threshold if cfg_db.tier2_threshold is not None else TIER2_PROFIT_THRESHOLD
+            except Exception:
+                cfg = SYMBOL_CONFIGS.get(symbol, {})
+                scaling_active = cfg.get("scaling_tier_active", True)
+                tier1_thresh = cfg.get("tier1_threshold", TIER1_PROFIT_THRESHOLD)
+                tier2_thresh = cfg.get("tier2_threshold", TIER2_PROFIT_THRESHOLD)
+
+        # Realized net profit & safety cushion relative to base capital ($155)
+        base_cap = self.base_capital if self.base_capital > 0 else 155.0
+        profit_buffer = max(0.0, balance - base_cap)
+        safety_cushion_usd = round(profit_buffer, 2)
+        net_profit_pct = ((balance - base_cap) / base_cap) * 100.0
+
+        # Drawdown safety override check ($2.25)
+        drawdown_override = floating_drawdown >= DRAWDOWN_OVERRIDE_THRESHOLD_USD
+
+        if not scaling_active:
+            target_tier = 0
+            tier_name = "TIER 0 - BASE"
+            risk_pct = 1.0
+            lot_multiplier = 1.0
+            reason = "Dynamic scaling inactive for symbol."
+        elif drawdown_override:
+            target_tier = 0
+            tier_name = "TIER 0 - BASE"
+            risk_pct = 1.0
+            lot_multiplier = 1.0
+            reason = f"Drawdown Safety Override: Floating loss ${floating_drawdown:.2f} touched 50% daily limit (${DRAWDOWN_OVERRIDE_THRESHOLD_USD:.2f}). Fallback to Tier 0."
+        else:
+            if net_profit_pct >= tier2_thresh:
+                target_tier = 2
+                tier_name = "TIER 2 - AGGRESSIVE"
+                risk_pct = 2.0
+                lot_multiplier = 1.50
+                reason = f"Aggressive Compounding: Realized profit +{net_profit_pct:.1f}% >= +{tier2_thresh:.1f}%."
+            elif net_profit_pct >= tier1_thresh:
+                target_tier = 1
+                tier_name = "TIER 1 - ACCELERATED"
+                risk_pct = 1.5
+                lot_multiplier = 1.25
+                reason = f"Accelerated Growth: Realized profit +{net_profit_pct:.1f}% in [{tier1_thresh:.1f}%, {tier2_thresh:.1f}%)."
+            else:
+                target_tier = 0
+                tier_name = "TIER 0 - BASE"
+                risk_pct = 1.0
+                lot_multiplier = 1.00
+                reason = f"Base Capital: Realized profit {net_profit_pct:+.1f}% < +{tier1_thresh:.1f}%."
+
+        # Milestone progress calculation
+        if target_tier == 0:
+            next_milestone_pct = tier1_thresh
+            progress = max(0.0, min(100.0, (net_profit_pct / tier1_thresh) * 100.0)) if tier1_thresh > 0 else 0.0
+            distance_pct = max(0.0, tier1_thresh - max(0.0, net_profit_pct))
+        elif target_tier == 1:
+            next_milestone_pct = tier2_thresh
+            span = tier2_thresh - tier1_thresh
+            curr_in_tier = net_profit_pct - tier1_thresh
+            progress = max(0.0, min(100.0, (curr_in_tier / span) * 100.0)) if span > 0 else 0.0
+            distance_pct = max(0.0, tier2_thresh - net_profit_pct)
+        else:
+            next_milestone_pct = tier2_thresh
+            progress = 100.0
+            distance_pct = 0.0
+
+        # State transition handling & Telegram / WebSocket alert
+        old_tier = self.current_tier
+        if target_tier != self.current_tier:
+            self.current_tier = target_tier
+            self.last_tier_transition = datetime.now(timezone.utc)
+            log_msg = f"Compounding Tier Transition: {old_tier} -> {target_tier} ({tier_name}). Risk: {risk_pct}%, Lot Multiplier: {lot_multiplier}x. Reason: {reason}"
+            logger.info(log_msg)
+            log_system_event("RiskEngine", log_msg)
+
+            # Non-blocking Telegram alert
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(notifier.send_tier_transition_alert(
+                    old_tier=old_tier,
+                    new_tier=target_tier,
+                    risk_percent=risk_pct,
+                    lot_multiplier=lot_multiplier,
+                    reason=reason,
+                    chat_id="884357013"
+                ))
+                loop.create_task(self.broadcast_event("TIER_TRANSITION", {
+                    "old_tier": old_tier,
+                    "new_tier": target_tier,
+                    "tier_name": tier_name,
+                    "risk_percent": risk_pct,
+                    "lot_multiplier": lot_multiplier,
+                    "reason": reason,
+                    "net_profit_pct": round(net_profit_pct, 2),
+                    "safety_cushion_usd": safety_cushion_usd,
+                }))
+            except RuntimeError:
+                pass
+
+        return {
+            "tier": target_tier,
+            "tier_name": tier_name,
+            "net_profit_pct": round(net_profit_pct, 2),
+            "safety_cushion_usd": safety_cushion_usd,
+            "base_capital_usd": round(base_cap, 2),
+            "effective_risk_pct": risk_pct,
+            "lot_multiplier": lot_multiplier,
+            "drawdown_override_active": drawdown_override,
+            "floating_drawdown": round(floating_drawdown, 2),
+            "drawdown_override_threshold": DRAWDOWN_OVERRIDE_THRESHOLD_USD,
+            "next_milestone_pct": round(next_milestone_pct, 2),
+            "distance_to_milestone_pct": round(distance_pct, 2),
+            "progress_to_next_milestone": round(progress, 1),
+            "reason": reason,
+        }
+
     def calculate_lot_size(
         self,
         symbol_or_balance: Any,
         stop_loss_distance: float = 0.0,
         tick_value: float = 1.0,
+        floating_drawdown: Optional[float] = None,
     ) -> float:
         """
-        Dynamically computes lot size per formula:
-        Lot Size = (Account Balance * Risk %) / (Stop Loss Distance * Tick Value)
+        Dynamically computes lot size with Dynamic Tiered Scaling and Drawdown Protection:
+        Lot Size = ((Account Balance * Risk %) / (Stop Loss Distance * Tick Value)) * Lot Multiplier
         Supports both signatures:
         - calculate_lot_size(symbol, stop_loss_distance)
         - calculate_lot_size(balance, sl_distance, tick_value)
@@ -296,26 +468,39 @@ class BotEngine:
         if isinstance(symbol_or_balance, (int, float)):
             balance = float(symbol_or_balance)
             sl_distance = stop_loss_distance
-            risk_pct = settings.RISK_PERCENT_PER_TRADE
             symbol = "XAUUSD"
+            acct = None
         else:
             symbol = str(symbol_or_balance)
             sl_distance = stop_loss_distance
             acct = self.mt5_client.account_info() if self.mt5_client else None
             balance = getattr(acct, "balance", 1000.0) if acct else 1000.0
-            cfg = SYMBOL_CONFIGS.get(symbol, {})
-            risk_pct = cfg.get("risk_percent", 1.0)
 
         if sl_distance <= 0:
             return 0.01
 
+        # Calculate floating drawdown if not explicitly passed
+        if floating_drawdown is None:
+            if acct:
+                floating_drawdown = max(0.0, self.starting_daily_balance - getattr(acct, "equity", balance))
+            else:
+                floating_drawdown = 0.0
+
+        # Evaluate dynamic compounding tier
+        tier_data = self.evaluate_compounding_tier(
+            symbol=symbol,
+            balance=balance,
+            floating_drawdown=floating_drawdown
+        )
+        risk_pct = tier_data["effective_risk_pct"]
+        lot_multiplier = tier_data["lot_multiplier"]
+
         risk_capital = balance * (risk_pct / 100.0)
 
-        if acct:
-            drawdown = max(0.0, self.starting_daily_balance - getattr(acct, "equity", balance))
-            if drawdown >= (0.5 * DAILY_DRAWDOWN_LIMIT_USD):
-                risk_capital *= 0.5
-                logger.info(f"Risk scaled down 50% for {symbol} due to floating drawdown (${drawdown:.2f})")
+        # Scale down 50% if floating drawdown touches 50% daily limit ($2.25)
+        if floating_drawdown >= DRAWDOWN_OVERRIDE_THRESHOLD_USD:
+            risk_capital *= 0.5
+            logger.info(f"Risk scaled down 50% for {symbol} due to floating drawdown (${floating_drawdown:.2f})")
 
         tick_size = 0.01
         sym_info = self.mt5_client.symbol_info(symbol) if self.mt5_client else None
@@ -336,7 +521,7 @@ class BotEngine:
         if per_tick_risk <= 0:
             return vol_min
 
-        raw_lot = risk_capital / per_tick_risk
+        raw_lot = (risk_capital / per_tick_risk) * lot_multiplier
         steps = math.floor(raw_lot / vol_step)
         norm_lot = steps * vol_step
         return round(max(vol_min, min(norm_lot, vol_max)), 2)
@@ -357,17 +542,23 @@ class BotEngine:
         rates = self.mt5_client.copy_rates_from_pos(symbol, tf, 1, 1)
 
         if rates is None or len(rates) == 0:
-            return True, "Rates unavailable, bypass candle check"
+            rates = self.mt5_client.copy_rates_from_pos(symbol, tf, 0, 2)
+            if rates is not None and len(rates) >= 2:
+                last_candle = rates[0]
+            else:
+                return False, "Rates unavailable - candle check rejected for safety"
+        else:
+            last_candle = rates[0]
 
-        last_candle = rates[0]
         c_open = last_candle["open"] if isinstance(last_candle, dict) else last_candle[1]
         c_high = last_candle["high"] if isinstance(last_candle, dict) else last_candle[2]
         c_low = last_candle["low"] if isinstance(last_candle, dict) else last_candle[3]
         c_close = last_candle["close"] if isinstance(last_candle, dict) else last_candle[4]
 
         total_range = c_high - c_low
-        if total_range <= 0:
-            return False, "Zero candle range"
+        min_range = 0.10 if symbol == "XAUUSD" else 0.04
+        if total_range < min_range:
+            return False, f"Flat candle range ({total_range:.3f} < {min_range:.3f}) - rejecting doji bar"
 
         if direction == "BUY":
             lower_wick = min(c_open, c_close) - c_low
@@ -825,23 +1016,69 @@ class BotEngine:
             if not configs.get(symbol, True):
                 continue
 
-            in_session, _ = self.is_within_trading_session(symbol)
+            in_session, sess_msg = self.is_within_trading_session(symbol)
             if not in_session:
                 continue
 
-            is_blackout, _ = await news_filter.is_news_blackout(symbol)
+            is_blackout, blk_msg = await news_filter.is_news_blackout(symbol)
             if is_blackout:
+                log_signal_audit(
+                    symbol=symbol,
+                    status="REJECTED_NEWS_BLACKOUT",
+                    reason=blk_msg,
+                )
                 continue
 
             aligned = tv_analyzer.get_aligned_signal(symbol)
-            if not aligned.get("is_aligned"):
-                continue
-
             direction = aligned.get("direction", "NEUTRAL")
-            valid_wick, _ = self.validate_candle_reversal(symbol, direction)
-            if not valid_wick:
+            m15_rec = aligned.get("m15_recommendation", "NEUTRAL")
+            h1_rec = aligned.get("h1_recommendation", "NEUTRAL")
+
+            if not aligned.get("is_aligned") or direction == "NEUTRAL":
                 continue
 
+            valid_wick, wick_msg = self.validate_candle_reversal(symbol, direction)
+            if not valid_wick:
+                log_signal_audit(
+                    symbol=symbol,
+                    status="REJECTED_WICK",
+                    direction=direction,
+                    reason=wick_msg,
+                    m15_consensus=m15_rec,
+                    h1_consensus=h1_rec,
+                )
+                continue
+
+            # Spread Guard Validation
+            spread = 0.0
+            if self.mt5_client:
+                sym_info = self.mt5_client.symbol_info(symbol)
+                spread = getattr(sym_info, "spread", 0.0) if sym_info else 0.0
+
+            cfg = SYMBOL_CONFIGS.get(symbol, {})
+            max_spread = cfg.get("max_spread_points", 35.0)
+            if spread > max_spread and spread > 0:
+                log_signal_audit(
+                    symbol=symbol,
+                    status="REJECTED_SPREAD",
+                    direction=direction,
+                    reason=f"Spread {spread:.1f} pts exceeds limit {max_spread:.1f} pts",
+                    m15_consensus=m15_rec,
+                    h1_consensus=h1_rec,
+                    spread=spread,
+                )
+                continue
+
+            # Record Executed Signal Audit
+            log_signal_audit(
+                symbol=symbol,
+                status="EXECUTED",
+                direction=direction,
+                reason=aligned.get("reason", ""),
+                m15_consensus=m15_rec,
+                h1_consensus=h1_rec,
+                spread=spread,
+            )
             await self.execute_trade_signal(symbol, direction, aligned_reason=aligned.get("reason", ""))
 
     async def start(self):

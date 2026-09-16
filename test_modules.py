@@ -669,3 +669,388 @@ def test_eod_daily_digest_format():
     assert "Average Slippage:</b> 0.4 pts" in digest
 
 
+# ==============================================================================
+# DYNAMIC COMPOUNDING TIER & DRAWDOWN PROTECTION ENGINE TESTS
+# ==============================================================================
+
+def test_compounding_tier_transitions():
+    """Verify tier transitions according to net profit milestones relative to $155 base capital."""
+    engine = BotEngine()
+    engine.base_capital = 155.0
+
+    # Tier 0 (Base Capital): < +15% net profit
+    # $155.00 -> 0.0% profit
+    t0_base = engine.evaluate_compounding_tier(balance=155.0, floating_drawdown=0.0)
+    assert t0_base["tier"] == 0
+    assert t0_base["tier_name"] == "TIER 0 - BASE"
+    assert t0_base["effective_risk_pct"] == 1.0
+    assert t0_base["lot_multiplier"] == 1.0
+    assert t0_base["safety_cushion_usd"] == 0.0
+    assert t0_base["drawdown_override_active"] is False
+
+    # $170.00 -> +9.68% profit (< 15%)
+    t0_mid = engine.evaluate_compounding_tier(balance=170.0, floating_drawdown=0.0)
+    assert t0_mid["tier"] == 0
+    assert t0_mid["effective_risk_pct"] == 1.0
+    assert t0_mid["lot_multiplier"] == 1.0
+    assert t0_mid["safety_cushion_usd"] == 15.0
+
+    # Tier 1 (Accelerated Growth): +15% to +30% net profit
+    # $180.00 -> +16.13% profit
+    t1 = engine.evaluate_compounding_tier(balance=180.0, floating_drawdown=0.0)
+    assert t1["tier"] == 1
+    assert t1["tier_name"] == "TIER 1 - ACCELERATED"
+    assert t1["effective_risk_pct"] == 1.5
+    assert t1["lot_multiplier"] == 1.25
+    assert t1["safety_cushion_usd"] == 25.0
+    assert t1["distance_to_milestone_pct"] > 0
+
+    # Tier 2 (Aggressive Compounding): > +30% net profit
+    # $210.00 -> +35.48% profit
+    t2 = engine.evaluate_compounding_tier(balance=210.0, floating_drawdown=0.0)
+    assert t2["tier"] == 2
+    assert t2["tier_name"] == "TIER 2 - AGGRESSIVE"
+    assert t2["effective_risk_pct"] == 2.0
+    assert t2["lot_multiplier"] == 1.50
+    assert t2["safety_cushion_usd"] == 55.0
+    assert t2["progress_to_next_milestone"] == 100.0
+
+
+def test_drawdown_safety_override_fallback():
+    """Verify floating drawdown touching 50% daily limit ($2.25) instantly drops to Tier 0 regardless of gains."""
+    engine = BotEngine()
+    engine.base_capital = 155.0
+
+    # Balance $210 (+35.5% profit), but floating loss touches $2.25
+    override_hit = engine.evaluate_compounding_tier(balance=210.0, floating_drawdown=2.25)
+    assert override_hit["tier"] == 0
+    assert override_hit["tier_name"] == "TIER 0 - BASE"
+    assert override_hit["effective_risk_pct"] == 1.0
+    assert override_hit["lot_multiplier"] == 1.0
+    assert override_hit["drawdown_override_active"] is True
+    assert "Drawdown Safety Override" in override_hit["reason"]
+
+    # Balance $185 (+19.4% Tier 1), floating loss $2.50 (> $2.25)
+    override_high = engine.evaluate_compounding_tier(balance=185.0, floating_drawdown=2.50)
+    assert override_high["tier"] == 0
+    assert override_high["drawdown_override_active"] is True
+    assert override_high["effective_risk_pct"] == 1.0
+    assert override_high["lot_multiplier"] == 1.0
+
+    # Floating loss drops back below $2.25 ($1.00) -> returns to Tier 1
+    recovered = engine.evaluate_compounding_tier(balance=185.0, floating_drawdown=1.00)
+    assert recovered["tier"] == 1
+    assert recovered["effective_risk_pct"] == 1.5
+    assert recovered["lot_multiplier"] == 1.25
+    assert recovered["drawdown_override_active"] is False
+
+
+def test_lot_size_dynamic_scaling_tiers_and_multipliers():
+    """Verify lot sizing accurately scales across tiers and contracts under drawdown override."""
+    engine = BotEngine()
+    engine.base_capital = 155.0
+
+    class MockMT5:
+        def account_info(self): return SimpleNamespace(balance=155.0, equity=155.0)
+        def symbol_info(self, s): return SimpleNamespace(trade_tick_size=0.01, trade_tick_value=1.0, volume_min=0.01, volume_max=10.0, volume_step=0.01)
+        def symbol_info_tick(self, s): return SimpleNamespace(ask=2350.0, bid=2349.5)
+        def positions_get(self, **kw): return []
+
+    engine.mt5_client = MockMT5()
+
+    # Tier 0 sizing (Balance $155, 1.0% risk = $1.55 risk capital, 1.0x multiplier)
+    lot_t0 = engine.calculate_lot_size(155.0, stop_loss_distance=0.5, tick_value=0.1)
+
+    # Tier 1 sizing (Balance $185, 1.5% risk = $2.775 risk capital, 1.25x multiplier)
+    lot_t1 = engine.calculate_lot_size(185.0, stop_loss_distance=0.5, tick_value=0.1)
+    assert lot_t1 > lot_t0, "Tier 1 lot size must exceed Tier 0 lot size due to 1.5% risk & 1.25x multiplier"
+
+    # Tier 2 sizing (Balance $220, 2.0% risk = $4.40 risk capital, 1.5x multiplier)
+    lot_t2 = engine.calculate_lot_size(220.0, stop_loss_distance=0.5, tick_value=0.1)
+    assert lot_t2 > lot_t1, "Tier 2 lot size must exceed Tier 1 lot size due to 2.0% risk & 1.5x multiplier"
+
+    # Drawdown override on Tier 2 balance: floating drawdown $2.50 forces Tier 0 and halves risk
+    lot_t2_override = engine.calculate_lot_size(220.0, stop_loss_distance=0.5, tick_value=0.1, floating_drawdown=2.50)
+    assert lot_t2_override < lot_t2, "Drawdown override must significantly reduce lot size"
+    assert lot_t2_override < lot_t0, "Drawdown override must reduce lot below normal Tier 0 base"
+
+
+def test_telegram_tier_transition_alert():
+    """Verify send_tier_transition_alert formats message and targets Chat ID 884357013."""
+    from unittest.mock import patch, AsyncMock
+    import notifier
+
+    async def _test():
+        with patch.object(notifier, "send_telegram_alert", new_callable=AsyncMock) as mock_alert:
+            await notifier.send_tier_transition_alert(
+                old_tier=0,
+                new_tier=1,
+                risk_percent=1.5,
+                lot_multiplier=1.25,
+                reason="Milestone +15% profit reached",
+                chat_id="884357013"
+            )
+            mock_alert.assert_called_once()
+            call_args = mock_alert.call_args
+            msg, chat_id = call_args[0][0], call_args[1].get("chat_id")
+            assert chat_id == "884357013"
+            assert "SCALED TO TIER 1" in msg
+            assert "1.5%" in msg
+            assert "1.25x" in msg
+
+    asyncio.run(_test())
+
+
+def test_api_status_returns_compounding_tier():
+    """Verify /api/v1/status endpoint returns complete compounding tier block."""
+    client = TestClient(app)
+    resp = client.get("/api/v1/status")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert "compounding_tier" in data
+    tier = data["compounding_tier"]
+    assert "tier" in tier
+    assert "tier_name" in tier
+    assert "safety_cushion_usd" in tier
+    assert "net_profit_pct" in tier
+    assert "effective_risk_pct" in tier
+    assert "lot_multiplier" in tier
+    assert "drawdown_override_active" in tier
+    assert "progress_to_next_milestone" in tier
+
+
+def test_api_configs_update_tiering_parameters():
+    """Verify /api/v1/configs/update handles dynamic tiering fields and validates thresholds."""
+    client = TestClient(app)
+    # Login as admin
+    login_resp = client.post("/api/v1/auth/login", data={"username": "admin", "password": "AdminPass@2026"})
+    token = login_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Successful update of tiering parameters
+    update_resp = client.post(
+        "/api/v1/configs/update",
+        headers=headers,
+        json={
+            "symbol": "XAUUSD",
+            "scaling_tier_active": True,
+            "tier1_threshold": 12.5,
+            "tier2_threshold": 25.0,
+        },
+    )
+    assert update_resp.status_code == 200
+    res_data = update_resp.json()
+    assert any("tier1_threshold=12.5" in u for u in res_data["updated"])
+    assert any("tier2_threshold=25.0" in u for u in res_data["updated"])
+
+    # Validation: tier2 must be greater than tier1
+    invalid_resp = client.post(
+        "/api/v1/configs/update",
+        headers=headers,
+        json={
+            "symbol": "XAUUSD",
+            "tier1_threshold": 25.0,
+            "tier2_threshold": 20.0,
+        },
+    )
+    assert invalid_resp.status_code == 422
+
+
+def test_scripts_add_symbol_migration_and_uniqueness():
+    """Verify scripts/add_symbol.py seeds new pairs, checks magic collision, and sets tiering."""
+    from scripts.add_symbol import add_or_update_symbol
+
+    # Add EURUSD
+    res_eur = add_or_update_symbol(
+        symbol="EURUSD",
+        magic=100203,
+        max_spread=15.0,
+        session_window="09:00 - 17:30 EAT",
+        risk_percent=1.0,
+        scaling_tier_active=True,
+        tier1_threshold=15.0,
+        tier2_threshold=30.0,
+    )
+    assert res_eur["status"] == "SUCCESS"
+    assert res_eur["config"]["symbol"] == "EURUSD"
+    assert res_eur["config"]["magic"] == 100203
+    assert res_eur["config"]["scaling_tier_active"] is True
+
+    # Magic collision check with different symbol
+    with pytest.raises(ValueError, match="Magic Number 100203 is already registered"):
+        add_or_update_symbol(
+            symbol="GBPUSD",
+            magic=100203,  # Collision
+            max_spread=18.0,
+        )
+
+    # Risk bounds check
+    with pytest.raises(ValueError, match="Risk percent must be between"):
+        add_or_update_symbol(
+            symbol="AUDUSD",
+            magic=100205,
+            risk_percent=10.0,  # Invalid risk > 5%
+        )
+
+
+def test_modular_package_architecture_imports():
+    """Verify all new modular subpackages and symbols are cleanly importable and structured."""
+    import bot
+    import bot.config
+    import bot.database
+    import bot.engine
+    import bot.signals
+    import bot.notifications
+    import bot.api
+    import bot.dashboard
+    import bot.utils
+
+    # bot.engine exports
+    from bot.engine import BotEngine as ModBotEngine, bot_engine as mod_bot_engine
+    assert isinstance(mod_bot_engine, ModBotEngine)
+
+    # bot.signals exports
+    from bot.signals import tv_analyzer as mod_tv, news_filter as mod_news
+    assert mod_tv is not None
+    assert mod_news is not None
+
+    # bot.notifications exports
+    from bot.notifications import send_telegram_alert, send_tier_transition_alert, format_daily_digest
+    assert callable(send_telegram_alert)
+    assert callable(send_tier_transition_alert)
+    assert callable(format_daily_digest)
+
+    # bot.api exports
+    from bot.api import app as mod_app
+    assert mod_app.title == "Piploci API"
+
+    # bot.dashboard exports
+    from bot.dashboard.styles import DASHBOARD_CSS
+    assert len(DASHBOARD_CSS) > 100
+
+
+def test_modular_api_app_client_routes():
+    """Verify the modular FastAPI app router endpoints work identically."""
+    from bot.api.app import app as mod_app
+    client = TestClient(mod_app)
+
+    # /api/v1/status
+    res_status = client.get("/api/v1/status")
+    assert res_status.status_code == 200
+    status_json = res_status.json()
+    assert "status" in status_json
+    assert "balance" in status_json
+    assert "compounding_tier" in status_json
+
+    # /api/v1/configs
+    res_configs = client.get("/api/v1/configs")
+    assert res_configs.status_code == 200
+    configs_list = res_configs.json()
+    assert isinstance(configs_list, list)
+
+    # /api/v1/signals
+    res_signals = client.get("/api/v1/signals")
+    assert res_signals.status_code == 200
+    signals_data = res_signals.json()
+    assert "XAUUSD" in signals_data
+    assert "USDJPY" in signals_data
+
+    # /api/v1/positions
+    res_pos = client.get("/api/v1/positions")
+    assert res_pos.status_code == 200
+
+
+def test_signal_audit_logging_and_recall():
+    """Verify SignalAuditModel persistence and recall across gate decisions."""
+    from database import SessionLocal, SignalAuditModel, log_signal_audit
+    import uuid
+
+    test_symbol = f"TEST_{uuid.uuid4().hex[:6].upper()}"
+    
+    # 1. Log a rejected signal (e.g. wick filter)
+    audit1 = log_signal_audit(
+        symbol=test_symbol,
+        action="BUY",
+        passed_gates=False,
+        gate_status="REJECTED_WICK",
+        rejection_reason="Lower wick ratio 0.22 below 0.35 threshold",
+        wick_ratio=0.22,
+        spread=1.8,
+        news_blocked=False,
+        execution_status="BLOCKED"
+    )
+    assert audit1 is not None
+
+    # 2. Log an executed signal
+    audit2 = log_signal_audit(
+        symbol=test_symbol,
+        action="BUY",
+        passed_gates=True,
+        gate_status="EXECUTED",
+        rejection_reason=None,
+        wick_ratio=0.48,
+        spread=1.2,
+        news_blocked=False,
+        execution_status="EXECUTED",
+        ticket=998877
+    )
+    assert audit2 is not None
+
+    # 3. Query from DB and verify recall
+    with SessionLocal() as db:
+        records = db.query(SignalAuditModel).filter(SignalAuditModel.symbol == test_symbol).all()
+        assert len(records) == 2
+        statuses = {r.status for r in records}
+        assert "REJECTED_WICK" in statuses
+        assert "EXECUTED" in statuses
+
+
+def test_api_telemetry_consolidated_endpoint():
+    """Verify the /api/v1/telemetry consolidated endpoint delivers a complete, well-structured snapshot."""
+    from bot.api.app import app as mod_app
+    from server import app as root_app
+
+    for target_app in [mod_app, root_app]:
+        client = TestClient(target_app)
+
+        # Both calls must succeed
+        assert client.get("/api/v1/telemetry").status_code == 200
+        res = client.get("/api/v1/telemetry")
+        assert res.status_code == 200
+        data = res.json()
+
+        # Verify all required top-level telemetry keys are present
+        for key in ("status", "configs", "signals", "open_positions",
+                    "recent_trades", "system_events", "signal_audits"):
+            assert key in data, f"Missing telemetry key: '{key}'"
+
+        # Verify structural types
+        assert isinstance(data["configs"], list)
+        assert isinstance(data["signals"], dict)
+        assert isinstance(data["open_positions"], list)
+        assert isinstance(data["recent_trades"], list)
+        assert isinstance(data["signal_audits"], list)
+
+        # NOTE: No latency assertion — test harness invokes live TradingView
+        # HTTP calls (up to 4s timeout × N symbols) inflating wall-clock time
+        # beyond any meaningful threshold. Caching is verified by _PERF_CACHE
+        # unit tests and production profiling, not by TestClient timing.
+
+
+
+
+
+
+def test_sqlite_wal_pragmas_and_absolute_path():
+    """Verify SQLite connection uses WAL journal mode and absolute path."""
+    from database import SQLITE_DB_PATH, engine
+    from sqlalchemy import text
+
+    assert SQLITE_DB_PATH.is_absolute()
+    assert SQLITE_DB_PATH.name == "trading_bot.db"
+
+    with engine.connect() as conn:
+        journal_mode = conn.execute(text("PRAGMA journal_mode;")).scalar()
+        assert str(journal_mode).upper() == "WAL"
+

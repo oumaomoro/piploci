@@ -167,13 +167,25 @@ DRAWDOWN_OVERRIDE_THRESHOLD_USD = settings.DRAWDOWN_OVERRIDE_THRESHOLD_USD
 
 MAGIC_XAUUSD = settings.XAUUSD_MAGIC
 MAGIC_USDJPY = settings.USDJPY_MAGIC
-ALLOWED_MAGIC_NUMBERS = [MAGIC_XAUUSD, MAGIC_USDJPY]
+
+# Generate magics for other pairs
+MAGIC_EURUSD = 100203
+MAGIC_GBPUSD = 100204
+MAGIC_AUDUSD = 100205
+MAGIC_USDCAD = 100206
+MAGIC_USDCHF = 100207
+MAGIC_NZDUSD = 100208
+
+ALLOWED_MAGIC_NUMBERS = [
+    MAGIC_XAUUSD, MAGIC_USDJPY, MAGIC_EURUSD, MAGIC_GBPUSD, 
+    MAGIC_AUDUSD, MAGIC_USDCAD, MAGIC_USDCHF, MAGIC_NZDUSD
+]
 
 TIMEZONE_EAT = "Africa/Nairobi"
 
 NEWS_BUFFER_BEFORE_MINUTES = settings.NEWS_BUFFER_BEFORE_MINUTES
 NEWS_BUFFER_AFTER_MINUTES = settings.NEWS_BUFFER_AFTER_MINUTES
-NEWS_SHIELD_CURRENCIES = ["USD", "JPY"]
+NEWS_SHIELD_CURRENCIES = ["USD", "JPY", "EUR", "GBP", "AUD", "CAD", "CHF", "NZD"]
 NEWS_REFRESH_INTERVAL_SECONDS = settings.NEWS_REFRESH_INTERVAL_SECONDS
 PARSE_API_KEY = settings.PARSE_API_KEY
 PARSE_FOREXFACTORY_API_URL = settings.PARSE_FOREXFACTORY_API_URL
@@ -186,40 +198,65 @@ MT5_PATH = settings.MT5_PATH
 MT5_RECONNECT_INTERVAL_SECONDS = settings.MT5_RECONNECT_INTERVAL_SECONDS
 MT5_HEARTBEAT_INTERVAL_SECONDS = settings.MT5_HEARTBEAT_INTERVAL_SECONDS
 
+# Standard forex session windows (EAT = UTC+3)
+# Calibrated per-pair to peak liquidity windows with tightest spreads
+STANDARD_FX_SESSIONS = [("03:00", "07:00"), ("10:00", "19:30")]  # Generic fallback
+
 SESSION_WINDOWS = {
+    # Gold: London PM / NY overlap only (max volatility & volume)
     "XAUUSD": [("15:30", "19:30")],
-    "USDJPY": [("03:00", "07:00"), ("15:30", "19:30")]
+    # JPY pairs: Asian session open + London/NY overlap
+    "USDJPY": [("03:00", "07:00"), ("15:30", "19:30")],
+    # EUR/GBP pairs: London open + London/NY overlap (peak EUR/GBP volume)
+    "EURUSD": [("10:00", "13:00"), ("15:30", "19:30")],
+    "GBPUSD": [("10:00", "13:00"), ("15:30", "19:30")],
+    # AUD/NZD pairs: Asian session (Sydney/Tokyo) + early London
+    "AUDUSD": [("03:00", "07:00"), ("10:00", "13:00")],
+    "NZDUSD": [("03:00", "07:00"), ("10:00", "13:00")],
+    # USD/CAD: NY session (CAD follows NY oil hours)
+    "USDCAD": [("15:30", "19:30")],
+    # USD/CHF: London open + London/NY overlap
+    "USDCHF": [("10:00", "13:00"), ("15:30", "19:30")],
 }
+
+def create_fx_config(symbol: str, magic: int) -> Dict[str, Any]:
+    return {
+        "magic_number": magic,
+        "lot_type": "dynamic_atr",
+        "risk_percent": 1.0,
+        "max_spread_price": 0.020,
+        "max_spread_points": 20.0,
+        "min_reversal_wick_ratio": 0.45,
+        "atr_period": 14,
+        "atr_sl_multiplier": 1.2,
+        "atr_tp_multiplier": 3.0,
+        "trailing_atr_multiplier": 1.5,
+        "tradingview_screener": "forex",
+        "tradingview_exchange": "FX_IDC",
+        "tradingview_symbol": symbol,
+    }
 
 SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     "XAUUSD": {
         "magic_number": MAGIC_XAUUSD,
         "lot_type": "dynamic_atr",
         "risk_percent": 1.0,
-        "max_spread_price": 0.35,       # $0.35 max spread for Gold (35 points)
+        "max_spread_price": 0.35,       
         "max_spread_points": 35.0,
         "min_reversal_wick_ratio": 0.55,
         "atr_period": 14,
         "atr_sl_multiplier": 1.5,
         "atr_tp_multiplier": 3.5,
-        "trailing_atr_multiplier": 1.5, # 1.5x ATR Breakeven / Trailing profit trigger
+        "trailing_atr_multiplier": 1.5,
         "tradingview_screener": "forex",
         "tradingview_exchange": "OANDA",
         "tradingview_symbol": "XAUUSD",
     },
-    "USDJPY": {
-        "magic_number": MAGIC_USDJPY,
-        "lot_type": "dynamic_atr",
-        "risk_percent": 1.0,
-        "max_spread_price": 0.020,      # 2.0 pips max spread for USDJPY
-        "max_spread_points": 20.0,
-        "min_reversal_wick_ratio": 0.45,
-        "atr_period": 14,
-        "atr_sl_multiplier": 1.2,
-        "atr_tp_multiplier": 3.0,
-        "trailing_atr_multiplier": 1.5, # 1.5x ATR Breakeven / Trailing profit trigger
-        "tradingview_screener": "forex",
-        "tradingview_exchange": "FX_IDC",
-        "tradingview_symbol": "USDJPY",
-    }
+    "USDJPY": create_fx_config("USDJPY", MAGIC_USDJPY),
+    "EURUSD": create_fx_config("EURUSD", MAGIC_EURUSD),
+    "GBPUSD": create_fx_config("GBPUSD", MAGIC_GBPUSD),
+    "AUDUSD": create_fx_config("AUDUSD", MAGIC_AUDUSD),
+    "USDCAD": create_fx_config("USDCAD", MAGIC_USDCAD),
+    "USDCHF": create_fx_config("USDCHF", MAGIC_USDCHF),
+    "NZDUSD": create_fx_config("NZDUSD", MAGIC_NZDUSD),
 }

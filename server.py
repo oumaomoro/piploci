@@ -44,6 +44,7 @@ from database import (
     ConfigModel,
     TradeLogModel,
     SystemEventModel,
+    SignalAuditModel,
     log_system_event,
 )
 from bot_engine import bot_engine
@@ -86,6 +87,9 @@ class ConfigUpdateRequest(BaseModel):
     risk_percent: Optional[float] = None
     max_spread: Optional[float] = None
     session_window: Optional[str] = None
+    scaling_tier_active: Optional[bool] = None
+    tier1_threshold: Optional[float] = None
+    tier2_threshold: Optional[float] = None
 
 
 # ==============================================================================
@@ -190,6 +194,11 @@ async def telemetry_broadcaster():
                             "USDJPY": is_blackout_jpy,
                         },
                         "positions": positions,
+                        "compounding_tier": bot_engine.evaluate_compounding_tier(
+                            balance=balance,
+                            equity=equity,
+                            floating_drawdown=drawdown
+                        ),
                     }
                 }
                 await ws_manager.broadcast(payload)
@@ -373,14 +382,16 @@ async def login_alias(payload: LoginRequest):
     return await login_json(payload)
 
 
-@app.get("/api/v1/status")
-async def get_status(db: Session = Depends(get_db)):
-    """Returns current balance, equity, active drawdown, circuit breaker state, MT5 health, and performance telemetry."""
-    import math
-    acct = bot_engine.mt5_client.account_info() if bot_engine.mt5_client else None
-    balance = getattr(acct, "balance", 1000.0) if acct else 1000.0
+_SERVER_PERF_CACHE = {"timestamp": 0.0, "data": {}}
 
-    # Calculate Performance Telemetry
+
+def get_cached_performance(db: Session) -> dict:
+    """Caches rolling performance statistics in-memory with a 10s TTL to prevent heavy DB recalculations."""
+    import time
+    now = time.time()
+    if now - _SERVER_PERF_CACHE["timestamp"] < 10.0 and _SERVER_PERF_CACHE["data"]:
+        return _SERVER_PERF_CACHE["data"]
+
     closed_trades = db.query(TradeLogModel).filter(TradeLogModel.status == "CLOSED").all()
     total_trades = len(closed_trades)
     wins = 0
@@ -396,18 +407,39 @@ async def get_status(db: Session = Depends(get_db)):
             gross_profit += pnl
         elif pnl < 0:
             gross_loss += abs(pnl)
-            
+
     win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0.0)
-    
-    # Sharpe Proxy (Trade-based Information Ratio)
+
     sharpe_proxy = 0.0
     if total_trades > 0:
         mean_pnl = sum(pnls) / total_trades
         variance = sum((p - mean_pnl) ** 2 for p in pnls) / total_trades
         std_dev = math.sqrt(variance)
         safe_std_dev = std_dev if std_dev > 0 else 1.0
-        sharpe_proxy = mean_pnl / safe_std_dev
+        sharpe_proxy = round(mean_pnl / safe_std_dev, 2)
+
+    data = {
+        "total_trades": total_trades,
+        "win_rate_pct": round(win_rate, 2),
+        "profit_factor": round(profit_factor, 2),
+        "sharpe_proxy": round(sharpe_proxy, 2),
+        "gross_profit": round(gross_profit, 2),
+        "gross_loss": round(gross_loss, 2),
+        "net_pnl": round(gross_profit - gross_loss, 2),
+    }
+    _SERVER_PERF_CACHE["timestamp"] = now
+    _SERVER_PERF_CACHE["data"] = data
+    return data
+
+
+@app.get("/api/v1/status")
+async def get_status(db: Session = Depends(get_db)):
+    """Returns current balance, equity, active drawdown, circuit breaker state, MT5 health, and performance telemetry."""
+    acct = bot_engine.mt5_client.account_info() if bot_engine.mt5_client else None
+    balance = getattr(acct, "balance", 1000.0) if acct else 1000.0
+
+    perf_stats = get_cached_performance(db)
 
     # Exclude manual trades (magic = 0) - isolate bot floating PnL and drawdown
     bot_positions = bot_engine.get_bot_positions()
@@ -433,12 +465,12 @@ async def get_status(db: Session = Depends(get_db)):
         "circuit_breaker_until": bot_engine.circuit_breaker_until.isoformat() if bot_engine.circuit_breaker_until else None,
         "allowed_magic_numbers": ALLOWED_MAGIC_NUMBERS,
         "server_time": datetime.now(timezone.utc).isoformat(),
-        "performance": {
-            "total_trades": total_trades,
-            "win_rate_pct": round(win_rate, 2),
-            "profit_factor": round(profit_factor, 2),
-            "sharpe_proxy": round(sharpe_proxy, 2),
-        }
+        "compounding_tier": bot_engine.evaluate_compounding_tier(
+            balance=balance,
+            equity=equity,
+            floating_drawdown=drawdown
+        ),
+        "performance": perf_stats,
     }
 
 
@@ -447,6 +479,69 @@ async def get_configs(db: Session = Depends(get_db)):
     """Returns all asset configurations."""
     configs = db.query(ConfigModel).all()
     return [c.to_dict() for c in configs]
+
+
+@app.get("/api/v1/telemetry")
+async def get_telemetry(db: Session = Depends(get_db)):
+    """
+    Consolidated high-speed telemetry endpoint providing complete state synchronization in a single round-trip.
+    """
+    import time
+    t0 = time.time()
+    status_data = await get_status(db=db)
+    configs = [c.to_dict() for c in db.query(ConfigModel).all()]
+
+    symbols = [c["symbol"] for c in configs] or ["XAUUSD", "USDJPY"]
+    signals_data = {}
+    for s in symbols:
+        sig = tv_analyzer.get_aligned_signal(s)
+        is_blk, blk_msg = await news_filter.is_news_blackout(s)
+        in_sess, sess_msg = bot_engine.is_within_trading_session(s)
+        signals_data[s] = {
+            "signal": sig,
+            "news_blackout": is_blk,
+            "news_message": blk_msg,
+            "session_active": in_sess,
+            "session_message": sess_msg,
+        }
+
+    raw_pos = bot_engine.get_bot_positions()
+    positions = []
+    for p in raw_pos:
+        positions.append({
+            "ticket": getattr(p, "ticket", 0),
+            "symbol": getattr(p, "symbol", ""),
+            "type": "BUY" if getattr(p, "type", 0) == 0 else "SELL",
+            "volume": getattr(p, "volume", 0.01),
+            "price_open": getattr(p, "price_open", 0.0),
+            "sl": getattr(p, "sl", 0.0),
+            "tp": getattr(p, "tp", 0.0),
+            "profit": getattr(p, "profit", 0.0),
+            "magic": getattr(p, "magic", 0),
+            "time": getattr(p, "time", 0),
+        })
+
+    recent_trades = [t.to_dict() for t in db.query(TradeLogModel).order_by(TradeLogModel.timestamp.desc()).limit(30).all()]
+    recent_events = [e.to_dict() for e in db.query(SystemEventModel).order_by(SystemEventModel.timestamp.desc()).limit(30).all()]
+    recent_audits = [a.to_dict() for a in db.query(SignalAuditModel).order_by(SignalAuditModel.timestamp.desc()).limit(50).all()]
+
+    latency_ms = (time.time() - t0) * 1000.0
+
+    return {
+        "status": status_data,
+        "configs": configs,
+        "signals": signals_data,
+        "positions": positions,
+        "open_positions": positions,
+        "trades": recent_trades,
+        "recent_trades": recent_trades,
+        "events": recent_events,
+        "system_events": recent_events,
+        "signal_audits": recent_audits,
+        "latency_ms": round(latency_ms, 2),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
 
 
 @app.post("/api/v1/control/toggle")
@@ -504,6 +599,20 @@ async def update_symbol_config(
     if payload.session_window is not None:
         cfg.session_window = payload.session_window.strip()
         changes.append(f"session_window='{payload.session_window.strip()}'")
+    if payload.scaling_tier_active is not None:
+        cfg.scaling_tier_active = payload.scaling_tier_active
+        changes.append(f"scaling_tier_active={payload.scaling_tier_active}")
+    if payload.tier1_threshold is not None:
+        if payload.tier1_threshold <= 0:
+            raise HTTPException(status_code=422, detail="tier1_threshold must be positive")
+        cfg.tier1_threshold = payload.tier1_threshold
+        changes.append(f"tier1_threshold={payload.tier1_threshold}")
+    if payload.tier2_threshold is not None:
+        current_t1 = payload.tier1_threshold if payload.tier1_threshold is not None else (cfg.tier1_threshold or 15.0)
+        if payload.tier2_threshold <= current_t1:
+            raise HTTPException(status_code=422, detail="tier2_threshold must be greater than tier1_threshold")
+        cfg.tier2_threshold = payload.tier2_threshold
+        changes.append(f"tier2_threshold={payload.tier2_threshold}")
 
     if not changes:
         return {"symbol": cfg.symbol, "message": "No changes submitted.", "updated": []}
