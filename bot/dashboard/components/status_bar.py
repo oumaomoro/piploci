@@ -3,10 +3,15 @@ Status Bar Component for Piploci Monitoring Dashboard.
 Renders high-level connection badges, MT5 terminal health, and server latency.
 """
 
-from datetime import datetime, timezone
-import pytz
+from datetime import datetime, timezone, timedelta
 import streamlit as st
 from typing import Dict, Any, Optional
+
+try:
+    from zoneinfo import ZoneInfo
+    _EAT_TZ = ZoneInfo("Africa/Nairobi")
+except Exception:
+    _EAT_TZ = timezone(timedelta(hours=3))
 
 
 def render_status_bar(status_data: Optional[Dict[str, Any]], latency_ms: Optional[float] = None):
@@ -39,7 +44,7 @@ def render_status_bar(status_data: Optional[Dict[str, Any]], latency_ms: Optiona
         gateway_badge = '<span class="badge b-red"><span class="badge-dot"></span>OFFLINE</span>'
 
     # EAT Time
-    eat_time_str = datetime.now(pytz.timezone("Africa/Nairobi")).strftime("%H:%M:%S EAT")
+    eat_time_str = datetime.now(_EAT_TZ).strftime("%H:%M:%S EAT")
     lat_str = f"{latency_ms:.0f}ms" if latency_ms is not None else "--"
 
     html = f"""
