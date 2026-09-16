@@ -13,7 +13,6 @@ try:
 except Exception:
     _EAT_TZ = timezone(timedelta(hours=3))
 
-
 def render_status_bar(status_data: Optional[Dict[str, Any]], latency_ms: Optional[float] = None):
     """Renders the top telemetry status bar."""
     is_online = status_data is not None
