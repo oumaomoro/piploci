@@ -14,6 +14,14 @@ import time
 import json
 from pathlib import Path
 
+# Fix Windows console encoding issues with emojis
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 TUNNEL_REGEX = re.compile(r"https://[a-z0-9\-]+\.trycloudflare\.com")
 WORKSPACE_DIR = Path(__file__).resolve().parent
 
@@ -36,10 +44,12 @@ def start_tunnel(port: int, label: str, results: dict):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
     except Exception as e:
-        print(f"❌ Failed to launch cloudflared for {label}: {e}")
+        print(f"[ERROR] Failed to launch cloudflared for {label}: {e}")
         return
 
     for line in iter(proc.stdout.readline, ''):
@@ -48,7 +58,7 @@ def start_tunnel(port: int, label: str, results: dict):
         if match and label not in results:
             url = match.group(0)
             results[label] = url
-            print(f"  ✅  {label:20s} -> {url}")
+            print(f"[OK] {label:20s} -> {url}")
             sys.stdout.flush()
     proc.wait()
 
@@ -78,8 +88,9 @@ def update_system_configs(results: dict):
                 "api_base": api_url,
                 "updated_at": time.strftime('%Y-%m-%d %H:%M:%S')
             }, f, indent=2)
+        print("[INFO] Saved tunnel_urls.txt and tunnel_urls.json")
     except Exception as e:
-        print(f"⚠️ Could not write tunnel URL files: {e}")
+        print(f"[WARN] Could not write tunnel URL files: {e}")
 
     # 2. Update .streamlit/secrets.toml
     try:
@@ -89,9 +100,9 @@ def update_system_configs(results: dict):
         secrets_content = f'API_BASE = "{api_url}"\n'
         with open(secrets_file, "w", encoding="utf-8") as f:
             f.write(secrets_content)
-        print("  📝 Updated .streamlit/secrets.toml")
+        print("[INFO] Updated .streamlit/secrets.toml")
     except Exception as e:
-        print(f"⚠️ Could not update secrets.toml: {e}")
+        print(f"[WARN] Could not update secrets.toml: {e}")
 
     # 3. Update bot/dashboard/api_client.py default fallback
     try:
@@ -103,7 +114,7 @@ def update_system_configs(results: dict):
             if pattern.search(content):
                 new_content = pattern.sub(new_line, content)
                 client_path.write_text(new_content, encoding="utf-8")
-                print("  📝 Updated bot/dashboard/api_client.py fallback URL")
+                print("[INFO] Updated bot/dashboard/api_client.py fallback URL")
 
                 # Push to Git so Streamlit Cloud pulls the updated endpoint
                 subprocess.run(
@@ -128,9 +139,9 @@ def update_system_configs(results: dict):
                         text=True,
                     )
                     if push_res.returncode == 0:
-                        print("  🚀 Pushed updated tunnel URL to GitHub (Streamlit Cloud synced!)")
+                        print("[INFO] Pushed updated tunnel URL to GitHub (Streamlit Cloud synced!)")
     except Exception as e:
-        print(f"⚠️ Could not sync with git: {e}")
+        print(f"[WARN] Could not sync with git: {e}")
 
 
 if __name__ == "__main__":
@@ -171,19 +182,20 @@ if __name__ == "__main__":
         api_url = results.get("FastAPI Backend", "")
 
         print("\n" + "="*70)
-        print("🎉  SYSTEM IS FULLY ACCESSIBLE REMOTELY 24/7:")
+        print("SYSTEM IS FULLY ACCESSIBLE REMOTELY 24/7:")
         print("="*70)
-        print(f"  📊  DASHBOARD (Mobile/Tablet/PC) : {dash_url}")
-        print(f"  ⚙️   BACKEND API GATEWAY         : {api_url}")
-        print(f"  ☁️   STREAMLIT CLOUD URL         : https://piploci.streamlit.app")
+        print(f"  DASHBOARD (Mobile/Tablet/PC) : {dash_url}")
+        print(f"  BACKEND API GATEWAY         : {api_url}")
+        print(f"  STREAMLIT CLOUD URL         : https://piploci.streamlit.app")
         print("="*70)
         print("\nKeep this process running. Press Ctrl+C at any time to stop tunnels.\n")
+        sys.stdout.flush()
     else:
-        print("\n⚠️ Could not detect both tunnel URLs within 30s. Check your internet connection.\n")
+        print("\n[WARN] Could not detect both tunnel URLs within 30s. Check your internet connection.\n")
 
     try:
         while True:
             time.sleep(60)
     except KeyboardInterrupt:
-        print("\n🔴 Tunnels stopped.")
+        print("\nTunnels stopped.")
         kill_existing_tunnels()
