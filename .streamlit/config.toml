@@ -1,18 +1,12 @@
-[theme]
-primaryColor    = "#38BDF8"
-backgroundColor = "#060B12"
-secondaryBackgroundColor = "#0D1420"
-textColor       = "#C8D1DC"
-font            = "sans serif"
-
 [server]
-headless              = true
-enableCORS            = false
-enableXsrfProtection  = true
-maxUploadSize         = 200
+fileWatcherType = "none"
+enableCORS = false
+enableXsrfProtection = false
+headless = true
+maxUploadSize = 10
 
 [browser]
 gatherUsageStats = false
 
-[client]
-showErrorDetails = false
+[runner]
+fastReruns = true

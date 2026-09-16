@@ -41,3 +41,6 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Cloudflare tunnel logs (auto-generated, contain sensitive URLs)
+cf_*.log
