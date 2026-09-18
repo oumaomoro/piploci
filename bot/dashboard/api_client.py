@@ -8,8 +8,8 @@ import requests
 import streamlit as st
 from typing import Dict, Any, Optional
 
-_LOCAL_DEFAULT = "http://127.0.0.1:8000/api/v1"
-_CLOUDFLARE_DEFAULT = "https://paintball-chuck-activation-fragrance.trycloudflare.com/api/v1"
+_LOCAL_DEFAULT = "http://127.0.0.1:8001/api/v1"
+_CLOUDFLARE_DEFAULT = "https://restaurants-liver-amino-lexmark.trycloudflare.com/api/v1"
 
 
 def get_api_base() -> str:
@@ -17,12 +17,12 @@ def get_api_base() -> str:
     if "api_base_override" in st.session_state and st.session_state["api_base_override"]:
         return st.session_state["api_base_override"].rstrip("/")
 
-    # 1. First priority for local development: check if port 8000 is open locally
+    # 1. First priority for local development: check if the active API port is open locally
     import socket
     for host in ("127.0.0.1", "localhost"):
         try:
-            socket.create_connection((host, 8000), timeout=0.15).close()
-            return f"http://{host}:8000/api/v1"
+            socket.create_connection((host, 8001), timeout=0.15).close()
+            return f"http://{host}:8001/api/v1"
         except OSError:
             pass
 
