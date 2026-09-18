@@ -7,9 +7,11 @@ import os
 import requests
 import streamlit as st
 from typing import Dict, Any, Optional
+from config import API_PORT
 
-_LOCAL_DEFAULT = "http://127.0.0.1:8001/api/v1"
-_CLOUDFLARE_DEFAULT = "https://restaurants-liver-amino-lexmark.trycloudflare.com/api/v1"
+LOCAL_API_PORT = API_PORT
+_LOCAL_DEFAULT = f"http://127.0.0.1:{LOCAL_API_PORT}/api/v1"
+_CLOUDFLARE_DEFAULT = "https://saturday-summary-yields-python.trycloudflare.com/api/v1"
 
 
 def get_api_base() -> str:
@@ -21,8 +23,8 @@ def get_api_base() -> str:
     import socket
     for host in ("127.0.0.1", "localhost"):
         try:
-            socket.create_connection((host, 8001), timeout=0.15).close()
-            return f"http://{host}:8001/api/v1"
+            socket.create_connection((host, LOCAL_API_PORT), timeout=0.15).close()
+            return f"http://{host}:{LOCAL_API_PORT}/api/v1"
         except OSError:
             pass
 
