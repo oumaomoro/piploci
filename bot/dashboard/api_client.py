@@ -11,7 +11,7 @@ from config import API_PORT
 
 LOCAL_API_PORT = API_PORT
 _LOCAL_DEFAULT = f"http://127.0.0.1:{LOCAL_API_PORT}/api/v1"
-_CLOUDFLARE_DEFAULT = "https://saturday-summary-yields-python.trycloudflare.com/api/v1"
+_CLOUDFLARE_DEFAULT = "https://double-charts-lime-intent.trycloudflare.com/api/v1"
 
 
 def get_api_base() -> str:
@@ -31,7 +31,13 @@ def get_api_base() -> str:
     # 2. On Streamlit Cloud: check secrets
     try:
         if hasattr(st, "secrets") and "API_BASE" in st.secrets:
-            return st.secrets["API_BASE"].rstrip("/")
+            secret_base = st.secrets["API_BASE"].rstrip("/")
+            try:
+                probe = requests.get(f"{secret_base}/status", timeout=1.5)
+                if probe.ok:
+                    return secret_base
+            except requests.RequestException:
+                pass
     except Exception:
         pass
 
